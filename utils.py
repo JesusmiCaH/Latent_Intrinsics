@@ -208,11 +208,14 @@ def parallel_load_image(img_path_list):
             return len(self.img_path_list)
 
         def __getitem__(self, index):
-            img_list = sorted(glob.glob(self.img_path_list[index] + '/*.jpg'))
+            img_list = sorted(glob.glob(self.img_path_list[index] + '/dir*.jpg'))
             images = []
             for img_path in img_list:
                 images.append(np.array(Image.open(img_path).convert('RGB')))
-            return np.stack(images)
+            if len(images) > 0:
+                return np.stack(images)
+            else:
+                return np.array([])
  
     dataset = loader(img_path_list)
     def collate_fn(batch):

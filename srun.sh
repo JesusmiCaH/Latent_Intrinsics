@@ -21,7 +21,8 @@ echo "NODELIST="${SLURM_NODELIST}
 master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_ADDR=$master_addr
 echo "MASTER_ADDR="$MASTER_ADDR
-data_path=/data/path
+
+data_path=/u/t/j/tjiang/private/Dataset
 
 python -m torch.distributed.launch \
 --nproc_per_node=4 --master_port=${port} main_cls.py \
