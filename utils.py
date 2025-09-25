@@ -212,10 +212,7 @@ def parallel_load_image(img_path_list):
             images = []
             for img_path in img_list:
                 images.append(np.array(Image.open(img_path).convert('RGB')))
-            if len(images) > 0:
-                return np.stack(images)
-            else:
-                return np.array([])
+            return np.stack(images)
  
     dataset = loader(img_path_list)
     def collate_fn(batch):
@@ -229,8 +226,13 @@ def parallel_load_image(img_path_list):
         collate_fn=collate_fn
     )
     images_list = []
+
+    early_quitter = 0
     for images in tqdm.tqdm(data_loader):
         images_list += images
+        early_quitter += 1
+        if early_quitter >= 10:
+            break
     return images_list
 
 
@@ -253,6 +255,7 @@ class MIT_Dataset_PreLoad(data.Dataset):
         images = self.images[folder_idx]
 
         light_index = np.random.randint(25)
+
         img1 = Image.fromarray(images[light_index])
         img2 = Image.fromarray(images[(light_index + 1 + np.random.randint(24)) % 25])
 

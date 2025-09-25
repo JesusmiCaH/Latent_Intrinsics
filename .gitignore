@@ -1,0 +1,9 @@
+# Ignore all PyTorch model weight files
+*.pth
+# Ignore all Python cache files
+*.pyc
+__pycache__/
+# Ignore all the checkpoint files   
+checkpoint/
+# Ignore dataset
+data/

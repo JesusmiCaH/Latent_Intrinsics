@@ -38,11 +38,11 @@ from PIL import Image
 import torchvision
 import tqdm
 from utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-from unets import UNet
+import ViT_autoencoder
 import copy
 from pytorch_ssim import SSIM as compute_SSIM_loss
 from pytorch_losses import gradient_loss
-from model_utils import plot_relight_img_train, compute_logdet_loss, intrinsic_loss,save_checkpoint
+from model_utils import plot_relight_img_train_ViT, compute_logdet_loss, intrinsic_loss_ViT, save_checkpoint
 
 #from sklearn.metrics import average_precision_score
 warnings.filterwarnings("ignore")
@@ -66,6 +66,8 @@ parser.add_argument('--save_freq', default=5, type=int,
                      help='print frequency (default: 10)')
 parser.add_argument('--resume', action = 'store_true',
                     help='path to latest checkpoint (default: none)')
+parser.add_argument('--mae_ckpth', default='mae_visualize_vit_large_ganloss.pth', type=str, metavar='PATH',
+                    help='path to mae checkpoint (default: none)')
 parser.add_argument('--world-size', default=-1, type=int,
                         help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
@@ -98,25 +100,25 @@ parser.add_argument("--weight_decay", type=float, default=0)
 parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
 parser.add_argument("--data_path", type=str, default=".")
+parser.add_argument("--vit_arch", type=str, default='mae_vit_large_patch16')
 
 args = parser.parse_args()
 
 
 def init_model(args):
-    model = UNet(img_resolution = 256, in_channels = 3, out_channels = 3,
-                     num_blocks_list = [1, 2, 2, 4, 4, 4], attn_resolutions = [0], model_channels = 32,
-                     channel_mult = [1, 2, 4, 4, 8, 16], affine_scale = float(args.affine_scale))
+    model = getattr(ViT_autoencoder, args.vit_arch)()
     model.cuda(args.gpu)
-    ema_model = copy.deepcopy(model)
-    ema_model.cuda(args.gpu)
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True,
-    broadcast_buffers=False)
-    ema_model = torch.nn.parallel.DistributedDataParallel(ema_model, device_ids=[args.gpu], find_unused_parameters=True,
-    broadcast_buffers=False)
-    init_ema_model(model, ema_model)
+    checkpoint = torch.load(args.mae_ckpth, map_location='cpu')
+    print("Checkpoint keys:", checkpoint.keys())
+    msg = model.load_state_dict(checkpoint['model'], strict=False)
+    print("🚋", msg)
+
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True,
+    # broadcast_buffers=False)
+
     optimizer = AdamW(model.parameters(),
                 lr= args.learning_rate, weight_decay = args.weight_decay)
-    return model, ema_model, optimizer
+    return model, optimizer
 
 def main():
     torch.manual_seed(2)
@@ -179,11 +181,11 @@ def main_worker(gpu, ngpus_per_node, args):
     args.save_folder_path = save_folder_path
     args.is_master = args.rank == 0
 
-    model, ema_model, optimizer = init_model(args)
+    model, optimizer = init_model(args)
     torch.cuda.set_device(args.gpu)
 
-    optimizer = AdamW(model.parameters(),
-                lr= args.learning_rate, weight_decay = args.weight_decay)
+    # optimizer = AdamW(model.parameters(),
+    #             lr= args.learning_rate, weight_decay = args.weight_decay)
     scaler = torch.cuda.amp.GradScaler()
 
     args.start_epoch = 0
@@ -199,7 +201,6 @@ def main_worker(gpu, ngpus_per_node, args):
                 checkpoint = torch.load(args.resume, map_location=loc)
             args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
-            ema_model.load_state_dict(checkpoint['ema_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             scaler.load_state_dict(checkpoint['scaler'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -208,7 +209,7 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    transform_train = [affine_crop_resize(size = (256, 256), scale = (0.2, 1.0)),
+    transform_train = [affine_crop_resize(size = (224, 224), scale = (0.2, 1.0)),
     transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(
@@ -237,7 +238,7 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(args.start_epoch, 120):
         if args.distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
-        loss_pack = train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args)
+        loss_pack = train_D(train_loader, model, scaler, optimizer, epoch, args)
 
         if epoch == 0:
             loss_list, rec_loss_list, sim_intrinsic_list = loss_pack
@@ -245,38 +246,36 @@ def main_worker(gpu, ngpus_per_node, args):
             loss_list += loss_pack[0]
             rec_loss_list += loss_pack[1]
             sim_intrinsic_list += loss_pack[2]
-
-
+        
+        print("📈", len(loss_list), len(rec_loss_list), len(sim_intrinsic_list))
         if args.is_master:
             if epoch % 2 == 0 and epoch != 0:
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': model.state_dict(),
                     'optimizer' : optimizer.state_dict(),
-                    'ema_state_dict': ema_model.state_dict(),
                     'scaler': scaler.state_dict(),
                 }, False, filename = '{}/last.pth.tar'.format(save_folder_path))
 
                 plt.figure(figsize=(20,5))
                 plt.subplot(1,3,1)
-                plt.plot(loss_list, color='red')
+                plt.plot(loss_list)
                 plt.title('total loss')
                 plt.subplot(1,3,2)
-                plt.plot(rec_loss_list, color='red')
+                plt.plot(rec_loss_list)
                 plt.title('reconstruction loss')
                 plt.subplot(1,3,3)
-                plt.plot(sim_intrinsic_list, color='red')
+                plt.plot(sim_intrinsic_list)
                 plt.title('intrinsic similarity')
                 plt.savefig('{}/training_curves.png'.format(save_folder_path))
                 plt.close('all')
-
+                
             if epoch % 20 == 0 and epoch != 0:
                 save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'optimizer' : optimizer.state_dict(),
-                'ema_state_dict': ema_model.state_dict(),
-                'scaler': scaler.state_dict(),
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                    'scaler': scaler.state_dict(),
                 },False , filename = '{}/{}.pth.tar'.format(save_folder_path, epoch))
 
 def print_gradients(model):
@@ -288,7 +287,7 @@ def print_gradients(model):
             max_norm = max(max_norm, p.data.norm(2))
     return max_grad, max_norm
 
-def train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args):
+def train_D(train_loader, model, scaler, optimizer, epoch, args):
     loss_name = [
                 'loss','logdet', 'light_logdet', 'intrinsic_sim',
                 'GPU Mem', 'Time', 'pe', 'ge']
@@ -307,11 +306,10 @@ def train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args):
     loss_list = []
     rec_loss_list = []
     sim_intrinsic_list = []
-
-    logdet_loss = compute_logdet_loss()
+    logdet_loss_intrinsic = compute_logdet_loss()
+    logdet_loss_extrinsic = compute_logdet_loss()
     ssim_loss = compute_SSIM_loss()
     for i, (input_img, ref_img) in enumerate(train_loader):
-
         input_img = input_img.to(args.gpu)
         ref_img = ref_img.to(args.gpu)
 
@@ -320,27 +318,37 @@ def train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args):
         if epoch >= 60:
             sigma = sigma * 0
 
-        noisy_input_img = input_img + torch.randn_like(input_img) * sigma
+        noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
         if i >= 70:
             break
-
+            
         with torch.cuda.amp.autocast():
-            intrinsic_input, extrinsic_input = model(noisy_input_img, run_encoder = True)
-            intrinsic_ref, extrinsic_ref = model(noisy_ref_img, run_encoder = True)
+            latent_input, _, ids_restore_input = model.forward_encoder(noisy_input_img, mask_ratio=0)    # no masking
+            intrinsic_input, extrinsic_input = latent_input[:, 1:, :], latent_input[:, :1, :]
 
-            mask = (torch.rand(input_img.shape[0]) > 0.9).float().to(args.gpu).reshape(-1,1,1,1).float() # 10% mask
-            intrinsic = [i_input * mask + i_ref * (1 - mask) for i_input, i_ref in zip(intrinsic_input, intrinsic_ref)]
+            latent_ref, _, ids_restore_ref = model.forward_encoder(noisy_ref_img, mask_ratio=0)    # no masking
+            intrinsic_ref, extrinsic_ref = latent_ref[:, 1:, :], latent_ref[:, :1, :]
 
-            recon_img = model([intrinsic, extrinsic_input], run_encoder = False).float()
-        
-        logdet_pred, logdet_target = logdet_loss(intrinsic_input)
-        logdet_pred_ext, logdet_target_ext = logdet_loss([extrinsic_input])
-        sim_intrinsic = intrinsic_loss(intrinsic_input, intrinsic_ref)
+            mask = (torch.rand(input_img.shape[0]) > 0.9).float().to(args.gpu).reshape(-1,1,1).float()    # 10% mask
+            
+            # Intrinsic mainly from reference image
+            intrinsic = mask * intrinsic_input + (1 - mask) * intrinsic_ref # [N, L, D]
+
+            recon_patches = model.forward_decoder(torch.cat([extrinsic_input, intrinsic], dim=1), ids_restore_ref)
+            recon_img = model.unpatchify(recon_patches).float()
+            # Maybe need some torch.einsum
+
+        # Since logdet_loss function take only LIST as input due to the original design, we should pack our input matrix into a list
+        logdet_pred, logdet_target = logdet_loss_intrinsic([intrinsic_input])
+        logdet_pred_ext, logdet_target_ext = logdet_loss_extrinsic([extrinsic_input])
+
+        sim_intrinsic = intrinsic_loss_ViT([intrinsic_input], [intrinsic_ref])
         rec_loss = nn.MSELoss()(recon_img,input_img)
+
         rec_loss = 10 * rec_loss + \
-                0.1 * (1 - ssim_loss(recon_img,input_img)) + gradient_loss(recon_img,input_img)
+                0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
         loss = rec_loss + args.reg_weight * ((logdet_pred - logdet_target) ** 2).mean() + \
                           args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() + \
                           - args.intrinsics_loss_weight * sim_intrinsic
@@ -351,9 +359,10 @@ def train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args):
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
-        update_ema_model(model, ema_model, 0.999)
 
-        t1 = time.time()
+        t1 = time.time()        
+        # print("🛠️", loss, sim_intrinsic)
+
         for val_id, val in enumerate([rec_loss, logdet_pred[:-1].mean(), logdet_pred[-1], sim_intrinsic,
                         torch.cuda.max_memory_allocated() / (1024.0 * 1024.0), t1 - t0, pe, ge
                     ]):
@@ -370,9 +379,10 @@ def train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args):
 
     if args.gpu == 0 and epoch % 5 == 0:
         target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
-        plot_relight_img_train(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
+        plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
 
     torch.distributed.barrier()
+
     return loss_list, rec_loss_list, sim_intrinsic_list
 
 if __name__ == '__main__':

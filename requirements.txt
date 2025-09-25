@@ -1,11 +1,5 @@
-# Use PyPI as main, plus PyTorch CUDA 12.4 wheels
---index-url https://pypi.org/simple
---extra-index-url https://download.pytorch.org/whl/cu124
-
 # Core
-torch==2.5.1+cu124
-torchvision==0.20.1+cu124
-timm==1.0.9
+timm==1.0.19
 
 # Diffusion & HF stack
 diffusers

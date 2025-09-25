@@ -22,15 +22,26 @@ master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_ADDR=$master_addr
 echo "MASTER_ADDR="$MASTER_ADDR
 
-data_path=/u/t/j/tjiang/private/Dataset
-
+data_path=/home/cc/Datasets
+port=50000
 python -m torch.distributed.launch \
---nproc_per_node=4 --master_port=${port} main_cls.py \
+--nproc_per_node=1 --master_port=${port} main_cls_ViT.py \
 --data_path ${data_path} \
 --reg_weight 1e-4 \
 --intrinsics_loss_weight 1e-1 \
 --epochs 120 \
---batch_size 64 \
+--batch_size 16 \
+--learning_rate 2e-4 \
+--weight_decay 1e-2 \
+--resume
+
+python -m torch.distributed.launch \
+--nproc_per_node=1 --master_port=${port} main_cls.py \
+--data_path ${data_path} \
+--reg_weight 1e-4 \
+--intrinsics_loss_weight 1e-1 \
+--epochs 120 \
+--batch_size 16 \
 --learning_rate 2e-4 \
 --weight_decay 1e-2 \
 --resume
