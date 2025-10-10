@@ -4,7 +4,7 @@
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/yourname/Latent_Intrinsics.git
+git clone https://github.com/JesusmiCaH/Latent_Intrinsics#
 cd Latent_Intrinsics
 
 # 2. (Recommended) Create and activate environment
@@ -12,14 +12,15 @@ conda create -n latent_intrinsics python=3.11 -y
 conda activate latent_intrinsics
 
 # 3. Install dependencies (adjust torch/cu version as needed)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 
 # 5. Download multi-illumination dataset
 mkdir -p data
 cd data
 wget https://data.csail.mit.edu/multilum/multi_illumination_train_mip2_jpg.zip 
-unzip multi_illumination_train_mip2_jpg.zip && cd ..
+unzip multi_illumination_train_mip2_jpg.zip && rm multi_illumination_train_mip2_jpg.zip
+cd ..
 
 # 6. Download pretrained checkpoint
 wget -nc https://dl.fbaipublicfiles.com/mae/visualize/mae_visualize_vit_large_ganloss.pth

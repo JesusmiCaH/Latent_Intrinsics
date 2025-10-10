@@ -32,17 +32,17 @@ from torch import autograd
 from torch.optim import AdamW
 from typing import Union, List, Optional, Callable
 import pdb
-from utils import  AverageMeter, ProgressMeter, init_ema_model, update_ema_model
+from utils.utils import AverageMeter, ProgressMeter, init_ema_model, update_ema_model
 import builtins
 from PIL import Image
 import torchvision
 import tqdm
-from utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-from unets import UNet
+from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
+from models.unets import UNet
 import copy
-from pytorch_ssim import SSIM as compute_SSIM_loss
-from pytorch_losses import gradient_loss
-from model_utils import plot_relight_img_train, compute_logdet_loss, intrinsic_loss,save_checkpoint
+from utils.pytorch_ssim import SSIM as compute_SSIM_loss
+from utils.pytorch_losses import gradient_loss
+from utils.model_utils import plot_relight_img_train, compute_logdet_loss, intrinsic_loss,save_checkpoint
 
 #from sklearn.metrics import average_precision_score
 warnings.filterwarnings("ignore")
@@ -202,7 +202,7 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         print("=> no checkpoint found at '{}'!!!!!!!".format(args.load_ckpt))
 
-    from eval_utils import eval_relight
+    from utils.eval_utils import eval_relight
     for i in range(12):
         eval_relight(args, 100, model)
     exit()

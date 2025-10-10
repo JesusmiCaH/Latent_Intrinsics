@@ -32,17 +32,17 @@ from torch import autograd
 from torch.optim import AdamW
 from typing import Union, List, Optional, Callable
 import pdb
-from utils import  AverageMeter, ProgressMeter, init_ema_model, update_ema_model
+from utils.utils import AverageMeter, ProgressMeter, init_ema_model, update_ema_model
 import builtins
 from PIL import Image
 import torchvision
 import tqdm
-from utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-import ViT_autoencoder
+from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
+from models import ViT_autoencoder
 import copy
-from pytorch_ssim import SSIM as compute_SSIM_loss
-from pytorch_losses import gradient_loss
-from model_utils import plot_relight_img_train_ViT, compute_logdet_loss, intrinsic_loss_ViT, save_checkpoint
+from utils.pytorch_ssim import SSIM as compute_SSIM_loss
+from utils.pytorch_losses import gradient_loss
+from utils.model_utils import plot_relight_img_train_ViT, compute_logdet_loss, intrinsic_loss_ViT, save_checkpoint
 
 #from sklearn.metrics import average_precision_score
 warnings.filterwarnings("ignore")
@@ -184,8 +184,6 @@ def main_worker(gpu, ngpus_per_node, args):
     model, optimizer = init_model(args)
     torch.cuda.set_device(args.gpu)
 
-    # optimizer = AdamW(model.parameters(),
-    #             lr= args.learning_rate, weight_decay = args.weight_decay)
     scaler = torch.cuda.amp.GradScaler()
 
     args.start_epoch = 0
@@ -347,11 +345,12 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         sim_intrinsic = intrinsic_loss_ViT([intrinsic_input], [intrinsic_ref])
         rec_loss = nn.MSELoss()(recon_img,input_img)
 
+        print("🛠️", args.intrinsics_loss_weight)
         rec_loss = 10 * rec_loss + \
                 0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
         loss = rec_loss + args.reg_weight * ((logdet_pred - logdet_target) ** 2).mean() + \
                           args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() + \
-                          - args.intrinsics_loss_weight * sim_intrinsic
+                          - args.intrinsics_loss_weight * sim_intrinsic * 50
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
