@@ -13,11 +13,11 @@ from PIL import Image
 import argparse
 import os
 from model_utils import plot_relight_img_train
-from models import ViT_autoencoder
+from Latent_Intrinsics.models import MAE_autoencoder
 
 def prepare_model(chkpt_dir, arch='mae_vit_large_patch16'):
     """Load pre-trained model"""
-    model = getattr(ViT_autoencoder, arch)()
+    model = getattr(MAE_autoencoder, arch)()
     checkpoint = torch.load(chkpt_dir, map_location='cpu')
     msg = model.load_state_dict(checkpoint['model'], strict=False)
     print(f"Model loaded: {msg}")

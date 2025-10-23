@@ -399,6 +399,7 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
         intrinsic1, extrinsic1 = latent1[:, 1:, :], latent1[:, :1, :]
         latent3, _, ids_restore3 = model.forward_encoder(img3, mask_ratio=0)    # no masking
         intrinsic3, extrinsic3 = latent3[:, 1:, :], latent3[:, :1, :]
+        # extrinsic3 = torch.zeros_like(extrinsic3)
 
         with torch.no_grad():
             # Reconstruction

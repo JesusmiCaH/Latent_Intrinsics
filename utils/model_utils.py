@@ -30,10 +30,8 @@ def intrinsic_loss(intrinsic1_list, intrinsic2_list):
 def intrinsic_loss_ViT(intrinsic1_list, intrinsic2_list):
     sim_intrinsic_list = []
     for intrinsic1, intrinsic2 in zip(intrinsic1_list, intrinsic2_list):
-        print("😂😂😂😂😂😂intrinsic1", intrinsic1[0,2].norm())
         intrinsic1 = F.normalize(intrinsic1, dim = -1)
         intrinsic2 = F.normalize(intrinsic2, dim = -1)
-        print("🚒🚒🚒🚒🚒🚒intrinsic1", intrinsic1[0,2].norm())
         sim_intrinsic_list.append((intrinsic1 * intrinsic2).sum(dim = -1).mean())
     return torch.stack(sim_intrinsic_list).mean()
 
@@ -111,24 +109,22 @@ def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path)
     img2 = ref_img
     img3 = target_img
 
-    latent1, _, ids_restore1 = model.forward_encoder(img1, mask_ratio=0)    # no masking
-    intrinsic1, extrinsic1 = latent1[:, 1:, :], latent1[:, :1, :]
-    latent2, _, ids_restore2 = model.forward_encoder(img2, mask_ratio=0)    # no masking
-    intrinsic2, extrinsic2 = latent2[:, 1:, :], latent2[:, :1, :]
-    latent3, _, ids_restore3 = model.forward_encoder(img3, mask_ratio=0)    # no masking
-    intrinsic3, extrinsic3 = latent3[:, 1:, :], latent3[:, :1, :]
-    
+    # Skips for intrinsics
+    extrinsic1, _, ids_restore1, intrinsics1 = model.forward_encoder(img1, mask_ratio=0)    # no masking
+    extrinsic2, _, ids_restore2, intrinsics2 = model.forward_encoder(img2, mask_ratio=0)    # no masking
+    extrinsic3, _, ids_restore3, intrinsics3 = model.forward_encoder(img3, mask_ratio=0)    # no masking
+
     with torch.no_grad():
         # Reconstruction
-        recon_patch_e1_i1 = model.forward_decoder(torch.cat([extrinsic1, intrinsic1], dim=1), ids_restore1).float()
+        recon_patch_e1_i1 = model.forward_decoder(extrinsic1, ids_restore1, intrinsics1).float()
         recon_img_e1_i1 = model.unpatchify(recon_patch_e1_i1).float()
     with torch.no_grad():
         # Relighting with extrinsics inferred from the reference
-        recon_patch_e2_i1 = model.forward_decoder(torch.cat([extrinsic2, intrinsic1], dim=1), ids_restore1).float()
+        recon_patch_e2_i1 = model.forward_decoder(extrinsic2, ids_restore1, intrinsics1).float()
         recon_img_e2_i1 = model.unpatchify(recon_patch_e2_i1).float()
     with torch.no_grad():
         # Relighting with target extrinsic
-        recon_patch_e3_i1 = model.forward_decoder(torch.cat([extrinsic3, intrinsic1], dim=1), ids_restore1).float()
+        recon_patch_e3_i1 = model.forward_decoder(extrinsic3, ids_restore1, intrinsics1).float()
         recon_img_e3_i1 = model.unpatchify(recon_patch_e3_i1).float()
 
     print("🚕", img1.shape, recon_img_e1_i1.shape)

@@ -38,7 +38,7 @@ from PIL import Image
 import torchvision
 import tqdm
 from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-from models import ViT_autoencoder
+from Latent_Intrinsics.models import MAE_autoencoder
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
 from utils.pytorch_losses import gradient_loss
@@ -48,7 +48,7 @@ from utils.model_utils import plot_relight_img_train_ViT, compute_logdet_loss, i
 warnings.filterwarnings("ignore")
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-j', '--workers', default=10, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -106,7 +106,7 @@ args = parser.parse_args()
 
 
 def init_model(args):
-    model = getattr(ViT_autoencoder, args.vit_arch)()
+    model = getattr(MAE_autoencoder, args.vit_arch)()
     model.cuda(args.gpu)
     checkpoint = torch.load(args.mae_ckpth, map_location='cpu')
     print("Checkpoint keys:", checkpoint.keys())
@@ -323,34 +323,47 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
             break
             
         with torch.cuda.amp.autocast():
-            latent_input, _, ids_restore_input = model.forward_encoder(noisy_input_img, mask_ratio=0)    # no masking
-            intrinsic_input, extrinsic_input = latent_input[:, 1:, :], latent_input[:, :1, :]
+            # latent_input, _, ids_restore_input, x_skips_input = model.forward_encoder(noisy_input_img, mask_ratio=0)    # no masking
+            # intrinsic_input, extrinsic_input = latent_input[:, 1:, :], latent_input[:, :1, :]
 
-            latent_ref, _, ids_restore_ref = model.forward_encoder(noisy_ref_img, mask_ratio=0)    # no masking
-            intrinsic_ref, extrinsic_ref = latent_ref[:, 1:, :], latent_ref[:, :1, :]
+            # latent_ref, _, ids_restore_ref, x_skips_ref = model.forward_encoder(noisy_ref_img, mask_ratio=0)    # no masking
+            # intrinsic_ref, extrinsic_ref = latent_ref[:, 1:, :], latent_ref[:, :1, :]
+
+            # mask = (torch.rand(input_img.shape[0]) > 0.9).float().to(args.gpu).reshape(-1,1,1).float()    # 10% mask
+            
+            # # Intrinsic mainly from reference image
+            # intrinsic = mask * intrinsic_input + (1 - mask) * intrinsic_ref # [N, L, D]
+
+            # recon_patches = model.forward_decoder(torch.cat([extrinsic_input, intrinsic], dim=1), ids_restore_ref, x_skips_ref)
+            # recon_img = model.unpatchify(recon_patches).float()
+            # # Maybe need some torch.einsum
+
+
+            extrinsic_input, _, ids_restore_input, intrinsic_input = model.forward_encoder(noisy_input_img, mask_ratio=0)    # no masking
+
+            extrinsic_latent, _, ids_restore_ref, intrinsic_ref = model.forward_encoder(noisy_ref_img, mask_ratio=0)    # no masking
 
             mask = (torch.rand(input_img.shape[0]) > 0.9).float().to(args.gpu).reshape(-1,1,1).float()    # 10% mask
             
             # Intrinsic mainly from reference image
-            intrinsic = mask * intrinsic_input + (1 - mask) * intrinsic_ref # [N, L, D]
+            intrinsic = [i_input * mask + i_ref * (1 - mask) for i_input, i_ref in zip(intrinsic_input, intrinsic_ref)] # [N, L, D]
 
-            recon_patches = model.forward_decoder(torch.cat([extrinsic_input, intrinsic], dim=1), ids_restore_ref)
+            recon_patches = model.forward_decoder(extrinsic_input, ids_restore_ref, intrinsic)
             recon_img = model.unpatchify(recon_patches).float()
             # Maybe need some torch.einsum
 
         # Since logdet_loss function take only LIST as input due to the original design, we should pack our input matrix into a list
-        logdet_pred, logdet_target = logdet_loss_intrinsic([intrinsic_input])
-        logdet_pred_ext, logdet_target_ext = logdet_loss_extrinsic([extrinsic_input])
+        logdet_pred, logdet_target = logdet_loss_intrinsic(intrinsic_input)
+        logdet_pred_ext, logdet_target_ext = logdet_loss_extrinsic([extrinsic_input[:, :1, :]])
 
-        sim_intrinsic = intrinsic_loss_ViT([intrinsic_input], [intrinsic_ref])
+        sim_intrinsic = intrinsic_loss_ViT(intrinsic_input, intrinsic_ref)
         rec_loss = nn.MSELoss()(recon_img,input_img)
-
-        print("🛠️", args.intrinsics_loss_weight)
         rec_loss = 10 * rec_loss + \
                 0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
-        loss = rec_loss + args.reg_weight * ((logdet_pred - logdet_target) ** 2).mean() + \
-                          args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() + \
-                          - args.intrinsics_loss_weight * sim_intrinsic * 50
+        loss = rec_loss - args.intrinsics_loss_weight * sim_intrinsic
+        # + args.reg_weight * ((logdet_pred - logdet_target) ** 2).mean() + \
+        #                   args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() + \
+        #                   
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)

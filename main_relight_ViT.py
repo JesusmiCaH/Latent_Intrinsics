@@ -38,7 +38,7 @@ from PIL import Image
 import torchvision
 import tqdm
 from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-from models import ViT_autoencoder
+from Latent_Intrinsics.models import MAE_autoencoder
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
 from utils.pytorch_losses import gradient_loss
@@ -104,7 +104,7 @@ args = parser.parse_args()
 
 
 def init_model(args):
-    model = getattr(ViT_autoencoder, args.vit_arch)()
+    model = getattr(MAE_autoencoder, args.vit_arch)()
     model.cuda(args.gpu)
 
     optimizer = AdamW(model.parameters(),
