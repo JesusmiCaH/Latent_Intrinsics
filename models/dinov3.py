@@ -15,7 +15,7 @@ from layers import LayerScale, Mlp, PatchEmbed, RMSNorm, RopePositionEmbedding, 
 
 
 def named_apply(
-    fn: Callable,
+    fn: callable,
     module: nn.Module,
     name: str = "",
     depth_first: bool = True,

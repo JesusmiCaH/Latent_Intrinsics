@@ -231,8 +231,8 @@ def parallel_load_image(img_path_list):
     for images in tqdm.tqdm(data_loader):
         images_list += images
         early_quitter += 1
-        if early_quitter >= 10:
-            break
+        # if early_quitter >= 30:
+        #     break
 
     return images_list
 

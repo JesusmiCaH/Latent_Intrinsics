@@ -52,6 +52,20 @@ python -m torch.distributed.launch \
 --learning_rate 2e-4 \
 --weight_decay 1e-2 \
 --resume
+
+# 9. Run MeanFlow-Ver Latent Intrinsic Encoder
+data_path=data
+port=50000
+python -m torch.distributed.launch \
+--nproc_per_node=1 --master_port=${port} main_meanflow.py \
+--data_path ${data_path} \
+--reg_weight 1e-4 \
+--intrinsics_loss_weight 1e-1 \
+--epochs 120 \
+--batch_size 16 \
+--learning_rate 2e-4 \
+--weight_decay 1e-2 \
+--resume
 ```
 ### Notes
 

@@ -67,7 +67,7 @@ class PatchEmbed(nn.Module):
         # assert H % patch_H == 0, f"Input image height {H} is not a multiple of patch height {patch_H}"
         # assert W % patch_W == 0, f"Input image width {W} is not a multiple of patch width: {patch_W}"
 
-        x = self.proj(x)  # B C H W
+        x = self.proj(x)  # B 768 H/P W/P
         H, W = x.size(2), x.size(3)
         x = x.flatten(2).transpose(1, 2)  # B HW C
         x = self.norm(x)

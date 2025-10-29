@@ -38,7 +38,7 @@ from PIL import Image
 import torchvision
 import tqdm
 from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-from Latent_Intrinsics.models import MAE_autoencoder
+from models.dinov3_vae import DINOv3VAE
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
 from utils.pytorch_losses import gradient_loss
@@ -97,14 +97,24 @@ parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
 parser.add_argument("--data_path", type=str, default=".")
 parser.add_argument("--load_ckpt", type=str, default=".")
-parser.add_argument("--vit_arch", type=str, default='mae_vit_large_patch16')
+parser.add_argument("--dino_size", type=str, default='vit_base')
 
 
 args = parser.parse_args()
 
 
 def init_model(args):
-    model = getattr(MAE_autoencoder, args.vit_arch)()
+    model = DINOv3VAE(
+        dino_model = args.dino_size,
+        dino_checkpoint_path = 'dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth',
+        encoder_cfg = {
+            'layerscale_init': 1.0e-05,
+            'mask_k_bias': True,
+            'n_storage_tokens': 4,
+        },
+        encoder_intermediate = 'FOUR_EVEN_INTERVALS',
+        with_extra_tokens = True,
+    )
     model.cuda(args.gpu)
 
     optimizer = AdamW(model.parameters(),

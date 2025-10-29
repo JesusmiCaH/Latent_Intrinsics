@@ -14,6 +14,7 @@ tqdm
 matplotlib
 scikit-image
 opencv-python-headless
+einops
 
 # Losses
 pytorch-ssim

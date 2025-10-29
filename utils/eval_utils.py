@@ -395,16 +395,13 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
         noisy_img1 = img1 + noise * sigma
         noisy_img3 = img3 + noise * sigma
 
-        latent1, _, ids_restore1 = model.forward_encoder(img1, mask_ratio=0)    # no masking
-        intrinsic1, extrinsic1 = latent1[:, 1:, :], latent1[:, :1, :]
-        latent3, _, ids_restore3 = model.forward_encoder(img3, mask_ratio=0)    # no masking
-        intrinsic3, extrinsic3 = latent3[:, 1:, :], latent3[:, :1, :]
-        # extrinsic3 = torch.zeros_like(extrinsic3)
+        intrinsic1, extrinsic1 = model.forward_encoder(noisy_img1)
+
+        intrinsic3, extrinsic3 = model.forward_encoder(noisy_img3)
 
         with torch.no_grad():
             # Reconstruction
-            relight_patches = model.forward_decoder(torch.cat([extrinsic3, intrinsic1], dim=1), ids_restore1).float()
-            relight_img2 = model.unpatchify(relight_patches).float()
+            relight_img2 = model.forward_decoder(intrinsic1, extrinsic3).float()
 
         def save_img(img_list, name):
             grid_size = 4

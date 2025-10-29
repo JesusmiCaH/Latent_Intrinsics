@@ -21,7 +21,7 @@ class DINOv3Decoder(nn.Module):
                 self.readout_projects.append(
                     nn.Sequential(
                         nn.Linear(2*channel, channel),
-                        nn.GeLU(),
+                        nn.GELU(),
                     )
                 )
         # BatchNorm layers
@@ -90,26 +90,24 @@ class DINOv3Decoder(nn.Module):
         )
         self.upconv_head = UpConvHead(post_process_channel, out_channel, n_hidden_channels=32)
 
-    def forward(self, inputs):
-        inputs = [inp for inp in inputs]     # What's the fucking meaning???
+    def forward(self, intrinsics, extrinsic):
         # Build pyramid features
         pyramid_features = []
-        for idx, input in enumerate(inputs):
-            # input includes visual tokens and CLS token
-            vis_tokens, cls_token = input[0], input[1] 
+        for idx, vis_tokens in enumerate(intrinsics):
+            # intrinsics: List of [vis_tokens]
             vis_token_shape = vis_tokens.shape      # B, C, H, W
-            # vis_tokens interact with cls_token
+            # vis_tokens interact with extrinsic
             if self.readout_type == "project":
                 x = vis_tokens.flatten(2).transpose(1, 2)   # B, H*W, C
-                readout = cls_token.unsqueeze(1).expand_as(x)   # B, H*W, C
+                readout = extrinsic.unsqueeze(1).expand_as(x)   # B, H*W, C
                 x = self.readout_projects[idx](torch.cat([x, readout], dim=-1))   # B, H*W, C
                 x = x.transpose(1, 2).reshape(vis_token_shape)   # B, C, H, W
             elif self.readout_type == "add":
-                x = vis_tokens.flatten(2) + cls_token.unsqueeze(-1)   # B, C, H*W
+                x = vis_tokens.flatten(2) + extrinsic.unsqueeze(-1)   # B, C, H*W
                 x = x.reshape(vis_token_shape)   # B, C, H, W
             elif self.readout_type == "product":
                 # TODO: apply constraint scaling here!!!!!!
-                x = vis_tokens.flatten(2) * cls_token.unsqueeze(-1)   # B, C, H*W
+                x = vis_tokens.flatten(2) * extrinsic.unsqueeze(-1)   # B, C, H*W
                 x = x.reshape(vis_token_shape)   # B, C, H, W
             else:
                 pass
@@ -121,10 +119,12 @@ class DINOv3Decoder(nn.Module):
         # Fuse pyramid features in reverse order
         for i in range(len(pyramid_features)):
             feature = self.post_convs[-i-1](pyramid_features[-i-1])
+            print("🍓feature shape:", i, feature.shape)
             if i == 0:
                 x = self.fusion_blocks[i](feature)
             else:
                 x = self.fusion_blocks[i](x, feature)
+        print("🫐fused feature shape:", x.shape)
         x = self.final_project(x)
         out = self.upconv_head(x)
         return out
