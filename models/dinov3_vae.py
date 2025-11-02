@@ -3,6 +3,7 @@ from torch import nn
 from .dinov3_decoder_ViT import *
 from dinov3_utils.backbone_out import _get_backbone_out_indices, BackboneLayersSet
 from . import dinov3
+from transformers import AutoModel
 
 class DINOv3VAE(nn.Module):
     def __init__(
@@ -16,10 +17,9 @@ class DINOv3VAE(nn.Module):
         ):
         super(DINOv3VAE, self).__init__()
         self.encoder = getattr(dinov3, dino_model)(**encoder_cfg)
-
-        # encoder is fixed as a pretrained DINOv3 model
         checkpoint = torch.load(dino_checkpoint_path)
         self.encoder.load_state_dict(checkpoint)
+
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.encoder.eval()
@@ -29,6 +29,7 @@ class DINOv3VAE(nn.Module):
         
         self.with_extra_tokens = with_extra_tokens
         self.n_lighting_tokens = 5 if with_extra_tokens else 1
+        
         latent_dim = self.encoder.embed_dim
         self.lighting_encoder = nn.Sequential(
             nn.Linear(latent_dim * self.n_lighting_tokens, latent_dim), nn.GELU(),

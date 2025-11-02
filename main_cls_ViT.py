@@ -326,7 +326,7 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
-        if i >= 400:
+        if i >= 800:
             break
 
         with torch.cuda.amp.autocast():

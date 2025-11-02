@@ -399,9 +399,12 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
 
         intrinsic3, extrinsic3 = model.forward_encoder(noisy_img3)
 
+        extrinsic_0_out = torch.zeros_like(extrinsic1)
+
         with torch.no_grad():
             # Reconstruction
             relight_img2 = model.forward_decoder(intrinsic1, extrinsic3).float()
+            relight_img_0_out = model.forward_decoder(intrinsic1, extrinsic_0_out).float()
 
         def save_img(img_list, name):
             grid_size = 4
@@ -415,7 +418,7 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
                 np_img_list.append(white_space)
             Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
 
-        save_img([img1, img2, img3, relight_img2], f'{args.save_folder_path}/relight_{epoch}_{i}')
+        save_img([img1, img2, img3, relight_img2, relight_img_0_out], f'{args.save_folder_path}/relight_{epoch}_{i}')
 
         shift = (relight_img2 - img2).mean(dim = [2,3], keepdim = True)
         correct_relight_img2 = relight_img2 - shift

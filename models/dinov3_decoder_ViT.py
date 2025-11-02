@@ -71,7 +71,7 @@ class DecoderBlock(nn.Module):
         act_layer = nn.GELU,
         ffn_layer = "mlp",
         init_values: Optional[float] = None,
-        alpha: float = 0.5,
+        alpha: float = 0.01,
     ):
         super().__init__()
         self.lighting_affine = nn.Linear(hidden_dim, hidden_dim)
