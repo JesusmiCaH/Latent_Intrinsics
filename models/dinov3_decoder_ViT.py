@@ -15,6 +15,7 @@ from functools import partial
 
 from layers import SelfAttentionBlock, Mlp, SwiGLUFFN, RMSNorm, LayerScale
 from .dinov3 import ffn_layer_dict, norm_layer_dict, dtype_dict
+from layers.CNN_blocks import ConvModule, ResidualBlock
 
 
 class PositionalEncoding2D(nn.Module):
@@ -125,7 +126,7 @@ class ConvRefinementHead(nn.Module):
         out_channels: int = 3,
         hidden_channels: int = 128,
         num_layers: int = 3,
-        upsample_factor: int = 4,
+        upsample_factor: int = 16,
     ):
         super().__init__()
         
@@ -134,30 +135,37 @@ class ConvRefinementHead(nn.Module):
         # Initial projection
         self.proj_in = nn.Conv2d(in_channels, hidden_channels, kernel_size=1)
         
-        
         # Progressive upsampling
         self.upsample_layers = nn.ModuleList()
         current_factor = 1
         while current_factor < upsample_factor:
             self.upsample_layers.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(hidden_channels, hidden_channels, kernel_size=4, stride=2, padding=1, bias=False),
-                    nn.GroupNorm(min(32, hidden_channels), hidden_channels),
-                    nn.GELU(),
+                ConvModule(
+                    in_channels=hidden_channels,
+                    out_channels=hidden_channels,
+                    kernel_size=4,
+                    stride=2,
+                    padding=1,
+                    norm=nn.GroupNorm,
+                    norm_cfg={"num_groups": min(32, hidden_channels)},
+                    activation=nn.GELU,
+                    is_transpose=True,
+                    upsample_factor=1,
+                    bias=False,
                 )
             )
             current_factor *= 2
         
-                # Refinement layers with residual connections
+        # Refinement layers with residual connections
         self.refine_layers = nn.ModuleList()
         for i in range(num_layers):
             self.refine_layers.append(
-                nn.Sequential(
-                    nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-                    nn.GroupNorm(min(32, hidden_channels), hidden_channels),
-                    nn.GELU(),
-                    nn.Conv2d(hidden_channels, hidden_channels, kernel_size=3, padding=1, bias=False),
-                    nn.GroupNorm(min(32, hidden_channels), hidden_channels),
+                ResidualBlock(
+                    in_channels=hidden_channels,
+                    hidden_channels=hidden_channels,
+                    out_channels=hidden_channels,
+                    num_groups=min(32, hidden_channels),
+                    activation=nn.GELU,
                 )
             )
         
@@ -184,13 +192,10 @@ class ConvRefinementHead(nn.Module):
 
         # Refinement with residual connections
         for refine_layer in self.refine_layers:
-            residual = x
-            x = refine_layer(x) + residual
-            x = F.gelu(x)
+            x = refine_layer(x)
         
         # Final projection to output
         x = self.proj_out(x)
-        
         return x
 
 
@@ -212,20 +217,22 @@ class DINOv3Decoder(nn.Module):
         num_heads: Number of attention heads (default: 8)
         ffn_ratio: FFN expansion ratio (default: 4.0)
         alpha: Weight for constraint scaling (default: 0.5)
-        upsample_factor: Upsampling factor for final output (default: 4)
+        upsample_factor: Upsampling factor for final output (default: 16)
         norm_layer: Normalization layer type (default: "layernorm")
         ffn_layer: FFN layer type (default: "mlp")
     """
     def __init__(
         self,
         in_dim: int = 768,
+        extrinsic_dim: int = 16, 
         hidden_dim: int = 512,
         out_channels: int = 3,
         num_decoder_layers: int = 4,
+        layer_depth: int = 1,
         num_heads: int = 8,
         ffn_ratio: float = 4.0,
         alpha: float = 0.5,
-        upsample_factor: int = 4,
+        upsample_factor: int = 16,
         norm_layer: str = "layernorm",
         ffn_layer: str = "mlp",
     ):
@@ -238,7 +245,11 @@ class DINOv3Decoder(nn.Module):
         # Positional encoding
         self.pos_encoding = PositionalEncoding2D(hidden_dim)
 
-        self.lighting_decoder = nn.Linear(in_dim, hidden_dim)
+        self.lighting_decoder = nn.Sequential(
+            nn.Linear(extrinsic_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
 
         # Transformer decoder blocks
         self.decoder_blocks = nn.ModuleList([
@@ -256,8 +267,7 @@ class DINOv3Decoder(nn.Module):
                 ffn_layer=ffn_layer_dict[ffn_layer],
                 init_values=None,
                 alpha=alpha,
-            )
-            for _ in range(num_decoder_layers)
+            ) for _ in range(num_decoder_layers)
         ])
 
         # Final normalization
@@ -330,34 +340,6 @@ class DINOv3Decoder(nn.Module):
         output = self.conv_head(x)
         
         return output
-    
-    def get_intermediate_features(self, intrinsics: List[torch.Tensor]) -> dict:
-        """
-        Get intermediate features for analysis/visualization
-        
-        Returns:
-            Dictionary containing:
-            - 'fused': Fused features after hypercolumn fusion
-            - 'decoder_features': List of features from each decoder block
-        """
-        # Fusion
-        x = self.fusion(intrinsics)
-        B, C, H, W = x.shape
-        
-        # Add positional encoding
-        pos_enc = self.pos_encoding(H, W, device=x.device)
-        x = x + pos_enc
-        
-        # Collect intermediate features
-        decoder_features = []
-        for decoder_block in self.decoder_blocks:
-            x = decoder_block(x)
-            decoder_features.append(x.clone())
-        
-        return {
-            'fused': self.fusion(intrinsics),
-            'decoder_features': decoder_features,
-        }
 
 
 # Factory functions for different decoder sizes

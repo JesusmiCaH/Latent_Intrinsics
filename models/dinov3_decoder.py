@@ -1,6 +1,7 @@
+from Latent_Intrinsics.layers import CNN_blocks
 import torch
 from torch import nn
-from layers import ConvModule, UpConvHead, FeatureFusionBlock
+from layers import UpConvHead, FeatureFusionBlock
 
 class DINOv3Decoder(nn.Module):
     def __init__(
@@ -34,7 +35,7 @@ class DINOv3Decoder(nn.Module):
         # Project into Conv Receptive Fields
         self.projects = nn.ModuleList(
             [
-                ConvModule(
+                CNN_blocks(
                     in_channels=in_channels[idx], 
                     out_channels=out_channel,
                     kernel_size=1,
@@ -67,7 +68,7 @@ class DINOv3Decoder(nn.Module):
         self.norm_cfg = None  # TODO CHECK THIS
         for channel in pyramid_channels:
             self.post_convs.append(
-                ConvModule(
+                CNN_blocks(
                     in_channels=channel,
                     out_channels=post_process_channel,
                     kernel_size=3,
@@ -85,7 +86,7 @@ class DINOv3Decoder(nn.Module):
         self.fusion_blocks[0].res_conv_unit1 = None
 
         # Final projection and upsampling
-        self.final_project = ConvModule(
+        self.final_project = CNN_blocks(
             in_channels=post_process_channel, out_channels=post_process_channel, kernel_size=3, padding=1, norm_cfg=self.norm_cfg
         )
         self.upconv_head = UpConvHead(post_process_channel, out_channel, n_hidden_channels=32)

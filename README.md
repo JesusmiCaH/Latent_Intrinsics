@@ -16,8 +16,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 pip install -r requirements.txt
 
 # 5. Download multi-illumination dataset
-mkdir -p data
-cd data
+mkdir -p data && cd data
+mkdir -p mit_dataset && cd mit_dataset
 wget https://data.csail.mit.edu/multilum/multi_illumination_train_mip2_jpg.zip 
 unzip multi_illumination_train_mip2_jpg.zip && rm multi_illumination_train_mip2_jpg.zip
 cd ..

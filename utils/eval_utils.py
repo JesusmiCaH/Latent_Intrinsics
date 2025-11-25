@@ -42,7 +42,8 @@ import torchvision.utils as vutils
 from PIL import Image
 from models import unets
 import tqdm
-from utils.utils import MIT_Dataset_Normal, MIT_Dataset, affine_crop_resize
+from utils.utils import affine_crop_resize
+from utils.MiT_dataset_utils import MIT_Dataset_Normal, MIT_Dataset
 from skimage.metrics import structural_similarity as ssim
 
 class DINO_extractor():
@@ -119,7 +120,7 @@ def get_eval_relight_dataloader(args, eval_pair_folder_shift = 5, eval_pair_ligh
     train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=64, shuffle=(train_sampler is None),
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last = False, persistent_workers = False)
     return train_loader
 
@@ -384,7 +385,7 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
     correct_ssim_list = []
     model.eval()
     for i, (img1, img2, img3) in enumerate(tqdm.tqdm(train_loader)):
-        print("🥑", i)
+        print("🥑", img1.shape)
         img1 = img1.to(args.gpu)
         img2 = img2.to(args.gpu)
         img3 = img3.to(args.gpu)
@@ -404,7 +405,8 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
         with torch.no_grad():
             # Reconstruction
             relight_img2 = model.forward_decoder(intrinsic1, extrinsic3).float()
-            relight_img_0_out = model.forward_decoder(intrinsic1, extrinsic_0_out).float()
+            # print("🔶 Reconstruction", img2[0,:,3,3], relight_img2[0,:,3,3])
+            relight_img_0_out = model.forward_decoder(intrinsic1, extrinsic_0_out).clamp(-1, 1).float()
 
         def save_img(img_list, name):
             grid_size = 4

@@ -4,6 +4,8 @@ from .dinov3_decoder_ViT import *
 from dinov3_utils.backbone_out import _get_backbone_out_indices, BackboneLayersSet
 from . import dinov3
 from transformers import AutoModel
+# from .ViTDecoder_CNN import ViTDecoder
+from .dinov3_decoder_ViT import *
 
 class DINOv3VAE(nn.Module):
     def __init__(
@@ -12,6 +14,7 @@ class DINOv3VAE(nn.Module):
             dino_checkpoint_path : str, 
             encoder_cfg, 
             encoder_intermediate: str|tuple, 
+            extrinsic_dim = 16, 
             with_extra_tokens = False,
             decoder_cfg = None,
         ):
@@ -34,16 +37,22 @@ class DINOv3VAE(nn.Module):
         self.lighting_encoder = nn.Sequential(
             nn.Linear(latent_dim * self.n_lighting_tokens, latent_dim), nn.GELU(),
             nn.Linear(latent_dim, latent_dim), nn.GELU(),
-            nn.Linear(latent_dim, latent_dim)
+            nn.Linear(latent_dim, extrinsic_dim), nn.LayerNorm(extrinsic_dim)
         )
 
         # Decoder needs to upsample back to original image size
         # If patch_size=16 and img_size=224, encoder output is 224/16 = 14x14
         # So we need upsample_factor=16 to get back to 224x224
         patch_size = encoder_cfg.get('patch_size', 16)
-        
-        self.decoder = dinov3_decoder_base(upsample_factor=patch_size)
-        
+
+        self.decoder = dinov3_decoder_base(upsample_factor=patch_size, extrinsic_dim=extrinsic_dim, alpha = 0.5)
+        # self.decoder = ViTDecoder(
+        #     in_dim=latent_dim,
+        #     pyramid_dims=[128, 256, 512, 1024],
+        #     post_process_channel=256,
+        #     out_channel=3,
+        # )
+
 
     def forward_encoder(self, x: torch.Tensor):
         outputs = self.encoder.get_intermediate_layers(

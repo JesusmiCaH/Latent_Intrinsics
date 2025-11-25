@@ -23,7 +23,7 @@ export MASTER_ADDR=$master_addr
 echo "MASTER_ADDR="$MASTER_ADDR
 
 
-data_path=data
+data_path=data/mit_dataset
 port=50000
 python -m torch.distributed.launch \
 --nproc_per_node=1 --master_port=${port} main_relight_ViT.py \

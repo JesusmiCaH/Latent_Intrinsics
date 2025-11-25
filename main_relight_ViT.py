@@ -37,8 +37,11 @@ import builtins
 from PIL import Image
 import torchvision
 import tqdm
-from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
+from utils.utils import affine_crop_resize, multi_affine_crop_resize
+from utils.MiT_dataset_utils import MIT_Dataset, MIT_Dataset_PreLoad
 from models.dinov3_vae import DINOv3VAE
+from models.RADIO_vae import RadioVAE
+
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
 from utils.pytorch_losses import gradient_loss
@@ -90,7 +93,6 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
 parser.add_argument("--learning_rate", type=float, default=1e-3)
-parser.add_argument("--batch_size", type=int, default=256)
 parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
@@ -116,6 +118,9 @@ def init_model(args):
         with_extra_tokens = True,
     )
     model.cuda(args.gpu)
+
+    # model = RadioVAE()
+    # model.cuda(args.gpu)
 
     optimizer = AdamW(model.parameters(),
                 lr= args.learning_rate, weight_decay = args.weight_decay)

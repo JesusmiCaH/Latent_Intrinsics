@@ -42,7 +42,7 @@ import torchvision.utils as vutils
 from PIL import Image
 from diffusion_extractor import StableDiffusion
 from PIL import ImageFilter, ImageOps
-from dataloader import MIT_Dataset
+from utils.MiT_dataset_utils import MIT_Dataset_sequence
 from pytorch_ssim import SSIM as compute_SSIM_loss
 from pytorch_losses import gradient_loss
 
@@ -71,7 +71,7 @@ transform = transforms.Compose([
 # Running stable diffusion during training time could be slow.
 # It's more efficient to precompute and load later.
 if precompute_feat_list:
-    dataset = MIT_Dataset(mit_data_path, transform)
+    dataset = MIT_Dataset_sequence(mit_data_path, transform)
     for folder_index in range(total_folder):
         img_list = dataset.get_img_folder_list(folder_index)
         for img_id, img in enumerate(img_list):

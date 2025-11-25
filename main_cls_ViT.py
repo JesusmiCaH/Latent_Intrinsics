@@ -37,8 +37,11 @@ import builtins
 from PIL import Image
 import torchvision
 import tqdm
-from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
+from utils.utils import affine_crop_resize, multi_affine_crop_resize
+from utils.MiT_dataset_utils import MIT_Dataset, MIT_Dataset_PreLoad
+from utils.BigTime_dataset_utils import BigTime_Dataset_PreLoad
 from models.dinov3_vae import DINOv3VAE
+from models.RADIO_vae import RadioVAE
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
 from utils.pytorch_losses import gradient_loss
@@ -117,6 +120,7 @@ def init_model(args):
         encoder_intermediate = 'FOUR_EVEN_INTERVALS',
         with_extra_tokens = True,
     )
+    # model = RadioVAE()
     model.cuda(args.gpu)
 
     # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True,
@@ -222,16 +226,19 @@ def main_worker(gpu, ngpus_per_node, args):
     ])]
 
     #train_dataset = MIT_Dataset(args.data_path, transform_train)
-    train_dataset = MIT_Dataset_PreLoad(args.data_path, transform_train, total_split = args.world_size, split_id = args.rank)
+    # BigTime_train_dataset = BigTime_Dataset_PreLoad(os.path.join(args.data_path, 'bigtime_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
+    MiT_train_dataset = MIT_Dataset_PreLoad(os.path.join(args.data_path, 'mit_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
 
-    print('NUM of training images: {}'.format(len(train_dataset)))
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle = True, drop_last = True)
-    else:
-        train_sampler = None
+    # print('NUM of training images: {}+{}'.format(len(MiT_train_dataset), len(BigTime_train_dataset)))
+
+    # if args.distributed:
+    #     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle = True, drop_last = True)
+    # else:
+    #     train_sampler = None
     train_sampler = None
+
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        torch.utils.data.ConcatDataset([MiT_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last = True, persistent_workers = True)
 
     if not args.multiprocessing_distributed or (args.multiprocessing_distributed
@@ -239,12 +246,12 @@ def main_worker(gpu, ngpus_per_node, args):
         if not os.path.exists(save_folder_path):
             os.system('mkdir -p {}'.format(save_folder_path))
 
-    for epoch in range(args.start_epoch, 120):
+    for epoch in range(args.start_epoch, args.start_epoch+120):
         if args.distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
         loss_pack = train_D(train_loader, model, scaler, optimizer, epoch, args)
 
-        record_time = 1
+        record_time = args.start_epoch+1
         if epoch == record_time:
             loss_list, rec_loss_list, sim_intrinsic_list = loss_pack
         elif epoch > record_time:
@@ -314,6 +321,7 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
     logdet_loss_intrinsic = compute_logdet_loss()
     logdet_loss_extrinsic = compute_logdet_loss()
     ssim_loss = compute_SSIM_loss()
+
     for i, (input_img, ref_img) in enumerate(train_loader):
         input_img = input_img.to(args.gpu)
         ref_img = ref_img.to(args.gpu)
@@ -326,9 +334,9 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
-        if i >= 800:
+        if i > 600:
             break
-
+    
         with torch.cuda.amp.autocast():
             intri_input, extri_input = model.forward_encoder(noisy_input_img)    # no masking
 
@@ -350,7 +358,6 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         sim_intrinsic = intrinsic_loss_ViT(intri_input, intri_ref)
 
         rec_loss = nn.MSELoss()(recon_img,input_img)
-        # print("🛠️ recon_img:", recon_img[0,0], "input_img:", input_img[0,0])
         rec_loss = 10 * rec_loss + \
                 0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
         loss = rec_loss - args.intrinsics_loss_weight * sim_intrinsic
@@ -387,6 +394,16 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
 
     torch.distributed.barrier()
+
+    def get_segmented_means(values, segment_size=100):
+        means = []
+        for i in range(0, len(values), segment_size):
+            means.append(np.mean(values[i:i+segment_size]))
+        return means
+    
+    loss_list = get_segmented_means(loss_list, 100)
+    rec_loss_list = get_segmented_means(rec_loss_list, 100)
+    sim_intrinsic_list = get_segmented_means(sim_intrinsic_list, 100)
 
     return loss_list, rec_loss_list, sim_intrinsic_list
 
