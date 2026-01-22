@@ -28,44 +28,17 @@ wget -nc "https://dinov3.llamameta.net/dinov3_vitb16/dinov3_vitb16_pretrain_lvd1
 # 7. Run Baseline 
 data_path=data
 port=50000
-python -m torch.distributed.launch \
---nproc_per_node=1 --master_port=${port} main_cls.py \
---data_path ${data_path} \
---reg_weight 1e-4 \
---intrinsics_loss_weight 1e-1 \
---epochs 120 \
---batch_size 16 \
---learning_rate 2e-4 \
---weight_decay 1e-2 \
---resume
+python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main_cls.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 5 --batch_size 16 --learning_rate 2e-4 --weight_decay 1e-2 --resume
 
 # 8. Run ViT-Ver Latent Intrinsic Encoder
 data_path=data
 port=50000
-python -m torch.distributed.launch \
---nproc_per_node=1 --master_port=${port} main_cls_ViT.py \
---data_path ${data_path} \
---reg_weight 1e-4 \
---intrinsics_loss_weight 1e-1 \
---epochs 120 \
---batch_size 16 \
---learning_rate 2e-4 \
---weight_decay 1e-2 \
---resume
+python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main_cls_ViT.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 5 --batch_size 16 --learning_rate 2e-4 --weight_decay 1e-2 --resume
 
 # 9. Run MeanFlow-Ver Latent Intrinsic Encoder
 data_path=data
 port=50000
-python -m torch.distributed.launch \
---nproc_per_node=1 --master_port=${port} main_meanflow.py \
---data_path ${data_path} \
---reg_weight 1e-4 \
---intrinsics_loss_weight 1e-1 \
---epochs 120 \
---batch_size 16 \
---learning_rate 2e-4 \
---weight_decay 1e-2 \
---resume
+python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main_meanflow.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 5 --batch_size 16 --learning_rate 2e-4 --weight_decay 1e-2 --resume
 ```
 ### Notes
 

@@ -55,7 +55,7 @@ class MIT_Dataset(data.Dataset):
         self.eval_pair_folder_shift = np.random.randint(1, len(img_folder_list), (len(img_folder_list) * 25))
         self.single_img_transform = img_transform[1]
         self.group_img_transform = img_transform[0]
-        print('init')
+        print('🍎', len(self.img_folder_list))
 
     def __len__(self):
         return len(self.img_folder_list) * self.epoch_multiplier * len(self.img_idx)

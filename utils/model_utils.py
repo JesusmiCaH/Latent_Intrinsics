@@ -93,8 +93,6 @@ def plot_relight_img_train(model, input_img, ref_img, target_img, save_path):
         print("🍉",len(img_list))
         
         for img in img_list:
-            print("img.shape", img.shape)
-        for img in img_list:
             img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 256, 256).permute(0,3, 1, 4, 2).reshape(256*grid_size, 256*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
             np_img_list.append(img)
             np_img_list.append(white_space)
@@ -121,8 +119,6 @@ def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path)
         recon_img_e2_i1 = model.forward_decoder(intri_1, extri_2).float()
         # Relighting with target extrinsic
         recon_img_e3_i1 = model.forward_decoder(intri_1, extri_3).float()
-
-    print("🚕", img1.shape, recon_img_e1_i1.shape)
 
     def save_img(img_list, name):
         grid_size = 4

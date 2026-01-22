@@ -38,8 +38,9 @@ from PIL import Image
 import torchvision
 import tqdm
 from utils.utils import affine_crop_resize, multi_affine_crop_resize
-from utils.MiT_dataset_utils import MIT_Dataset, MIT_Dataset_PreLoad
-from utils.BigTime_dataset_utils import BigTime_Dataset_PreLoad
+from data_utils.MiT_dataset_utils import MIT_Dataset, MIT_Dataset_PreLoad
+# from data_utils.BigTime_dataset_utils import BigTime_Dataset_PreLoad
+from data_utils.JHU_dataset_utils import JHU_Dataset_PreLoad
 from models.dinov3_vae import DINOv3VAE
 from models.RADIO_vae import RadioVAE
 import copy
@@ -58,7 +59,7 @@ parser.add_argument('--epochs', default=200, type=int, metavar='N',
 parser.add_argument('--img_size', default=224, type=int,
                     help='img size')
 parser.add_argument('--affine_scale', default=5e-3, type=float)
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', '--batch_size', default=256, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
@@ -81,9 +82,7 @@ parser.add_argument('--setting', default='0_0_0', type=str,
                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
-parser.add_argument('--local_rank', default=-1, type=int,
-                    help='local rank for distributed training')
-parser.add_argument('--local-rank', default=-1, type=int,
+parser.add_argument('--local_rank', '--local-rank', default=-1, type=int,
                     help='local rank for distributed training')
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
@@ -97,7 +96,6 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
 parser.add_argument("--learning_rate", type=float, default=1e-3)
 parser.add_argument("--intrinsics_loss_weight", type=float, default=1e-1)
 parser.add_argument("--reg_weight", type=float, default=1e-4)
-parser.add_argument("--batch_size", type=int, default=256)
 parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
@@ -226,10 +224,10 @@ def main_worker(gpu, ngpus_per_node, args):
     ])]
 
     #train_dataset = MIT_Dataset(args.data_path, transform_train)
-    # BigTime_train_dataset = BigTime_Dataset_PreLoad(os.path.join(args.data_path, 'bigtime_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
     MiT_train_dataset = MIT_Dataset_PreLoad(os.path.join(args.data_path, 'mit_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
+    JHU_train_dataset = JHU_Dataset_PreLoad(os.path.join(args.data_path, 'jhu_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
 
-    # print('NUM of training images: {}+{}'.format(len(MiT_train_dataset), len(BigTime_train_dataset)))
+    print('NUM of training images: {}+{}'.format(len(MiT_train_dataset), len(JHU_train_dataset)))
 
     # if args.distributed:
     #     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle = True, drop_last = True)
@@ -238,7 +236,7 @@ def main_worker(gpu, ngpus_per_node, args):
     train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        torch.utils.data.ConcatDataset([MiT_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
+        torch.utils.data.ConcatDataset([MiT_train_dataset, JHU_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last = True, persistent_workers = True)
 
     if not args.multiprocessing_distributed or (args.multiprocessing_distributed
@@ -246,49 +244,29 @@ def main_worker(gpu, ngpus_per_node, args):
         if not os.path.exists(save_folder_path):
             os.system('mkdir -p {}'.format(save_folder_path))
 
+    # Initialize loss lists globally
+    loss_list = []
+    rec_loss_list = []
+    sim_intrinsic_list = []
+
     for epoch in range(args.start_epoch, args.start_epoch+120):
         if args.distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
-        loss_pack = train_D(train_loader, model, scaler, optimizer, epoch, args)
-
-        record_time = args.start_epoch+1
-        if epoch == record_time:
-            loss_list, rec_loss_list, sim_intrinsic_list = loss_pack
-        elif epoch > record_time:
-            loss_list += loss_pack[0]
-            rec_loss_list += loss_pack[1]
-            sim_intrinsic_list += loss_pack[2]
+        # Pass lists to be updated in-place
+        train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_loss_list, sim_intrinsic_list)
         
-            print("📈", len(loss_list), len(rec_loss_list), len(sim_intrinsic_list))
-            if args.is_master:
-                if epoch % 2 == 0 and epoch != 0:
-                    save_checkpoint({
-                        'epoch': epoch + 1,
-                        'state_dict': model.state_dict(),
-                        'optimizer' : optimizer.state_dict(),
-                        'scaler': scaler.state_dict(),
-                    }, False, filename = '{}/last.pth.tar'.format(save_folder_path))
-
-                    plt.figure(figsize=(20,5))
-                    plt.subplot(1,3,1)
-                    plt.plot(loss_list)
-                    plt.title('total loss')
-                    plt.subplot(1,3,2)
-                    plt.plot(rec_loss_list)
-                    plt.title('reconstruction loss')
-                    plt.subplot(1,3,3)
-                    plt.plot(sim_intrinsic_list)
-                    plt.title('intrinsic similarity')
-                    plt.savefig('{}/training_curves.png'.format(save_folder_path))
-                    plt.close('all')
-                    
-                if epoch % 20 == 0 and epoch != 0:
-                    save_checkpoint({
-                        'epoch': epoch + 1,
-                        'state_dict': model.state_dict(),
-                        'optimizer' : optimizer.state_dict(),
-                        'scaler': scaler.state_dict(),
-                    },False , filename = '{}/{}.pth.tar'.format(save_folder_path, epoch))
+        # Plotting and saving is now handled inside train_D periodically, 
+        # but we can still do an end-of-epoch save/plot if desired.
+        # Keeping original end-of-epoch logic if needed, but the requirement was "Per 2k step".
+        # Let's keep a final save at end of epoch just in case 2k step didn't align with end.
+        
+        if args.is_master:
+             save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+                'scaler': scaler.state_dict(),
+            }, False, filename = '{}/last.pth.tar'.format(save_folder_path))
 
 def print_gradients(model):
     max_grad = 0
@@ -299,30 +277,27 @@ def print_gradients(model):
             max_norm = max(max_norm, p.data.norm(2))
     return max_grad, max_norm
 
-def train_D(train_loader, model, scaler, optimizer, epoch, args):
-    loss_name = [
-                'loss','logdet', 'light_logdet', 'intrinsic_sim',
-                'GPU Mem', 'Time', 'pe', 'ge']
-    moco_loss_meter = [AverageMeter(name, ':6.3f') for name in loss_name]
-    progress = ProgressMeter(
-        len(train_loader),
-        moco_loss_meter,
-        prefix="Epoch: [{}]".format(epoch))
-
+def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_loss_list, sim_intrinsic_list):
     # switch to train mode
     t0 = time.time()
     P_mean=-1.2
     P_std=1.2
     sigma_data = 0.5
 
-    loss_list = []
-    rec_loss_list = []
-    sim_intrinsic_list = []
     logdet_loss_intrinsic = compute_logdet_loss()
     logdet_loss_extrinsic = compute_logdet_loss()
     ssim_loss = compute_SSIM_loss()
 
-    for i, (input_img, ref_img) in enumerate(train_loader):
+    def smooth_curve(data, window_size=500):
+        if len(data) < window_size:
+             return data
+        box = np.ones(window_size) / window_size
+        return np.convolve(data, box, mode='valid')
+
+    # Wrap train_loader with tqdm
+    pbar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch}", disable=not args.is_master)
+
+    for i, (input_img, ref_img) in enumerate(pbar):
         input_img = input_img.to(args.gpu)
         ref_img = ref_img.to(args.gpu)
 
@@ -334,8 +309,7 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
-        if i > 600:
-            break
+        # Removed break condition: if i > 600: break
     
         with torch.cuda.amp.autocast():
             intri_input, extri_input = model.forward_encoder(noisy_input_img)    # no masking
@@ -361,51 +335,74 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args):
         rec_loss = 10 * rec_loss + \
                 0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
         loss = rec_loss - args.intrinsics_loss_weight * sim_intrinsic
-        # + args.reg_weight * ((logdet_pred - logdet_target) ** 2).mean() + \
-        #                   args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() + \
-        #                   
-
+        
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        ge, pe = print_gradients(model)
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
-
-        t1 = time.time()        
-        # print("🛠️", loss, sim_intrinsic)
-
-        for val_id, val in enumerate([rec_loss, logdet_pred[:-1].mean(), logdet_pred[-1], sim_intrinsic,
-                        torch.cuda.max_memory_allocated() / (1024.0 * 1024.0), t1 - t0, pe, ge
-                    ]):
-            if not isinstance(val, float) and not isinstance(val, int):
-                val = val.item()
-            moco_loss_meter[val_id].update(val)
-        progress.display(i)
+        
         t0 = time.time()
         torch.cuda.reset_peak_memory_stats()
 
         loss_list.append(loss.item())
         rec_loss_list.append(rec_loss.item())
         sim_intrinsic_list.append(sim_intrinsic.item())
+        
+        # Update progress bar
+        if i % 10 == 0:
+            pbar.set_postfix({'loss': loss.item(), 'rec_loss': rec_loss.item(), 'sim_int': sim_intrinsic.item()})
+
+        # Periodic Saving and Plotting every 1000 steps
+        if i % 1000 == 0 and i > 0:
+             if args.is_master:
+                    print("💾 Saving checkpoint and plotting...")
+                    save_checkpoint({
+                        'epoch': epoch + 1,
+                        'state_dict': model.state_dict(),
+                        'optimizer' : optimizer.state_dict(),
+                        'scaler': scaler.state_dict(),
+                    }, False, filename = '{}/last.pth.tar'.format(args.save_folder_path))
+
+                    # Plot relighting result
+                    target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
+                    plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
+
+                    # Plot smoothed curves with raw data background
+                    plt.figure(figsize=(20,5))
+                    
+                    plt.subplot(1,3,1)
+                    plt.plot(loss_list, alpha=0.3, color='blue', label='Total Loss')
+                    if len(loss_list) > 500:
+                        plt.plot(np.arange(len(smooth_curve(loss_list))) + (500-1), smooth_curve(loss_list), color='blue', label='Total Loss (Smoothed)')
+                    plt.title('total loss')
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    
+                    plt.subplot(1,3,2)
+                    plt.plot(rec_loss_list, alpha=0.3, color='orange', label='Reconstruction Loss')
+                    if len(rec_loss_list) > 500:
+                        plt.plot(np.arange(len(smooth_curve(rec_loss_list))) + (500-1), smooth_curve(rec_loss_list), color='orange', label='Reconstruction Loss (Smoothed)')
+                    plt.title('reconstruction loss')
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    
+                    plt.subplot(1,3,3)
+                    plt.plot(sim_intrinsic_list, alpha=0.3, color='green', label='Intrinsic Similarity')
+                    if len(sim_intrinsic_list) > 500:
+                        plt.plot(np.arange(len(smooth_curve(sim_intrinsic_list))) + (500-1), smooth_curve(sim_intrinsic_list), color='green', label='Intrinsic Similarity (Smoothed)')
+                    plt.title('intrinsic similarity')
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    
+                    plt.savefig('{}/training_curves.png'.format(args.save_folder_path))
+                    plt.close('all')
 
     if args.gpu == 0 and epoch % 5 == 0:
         target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
         plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
 
     torch.distributed.barrier()
-
-    def get_segmented_means(values, segment_size=100):
-        means = []
-        for i in range(0, len(values), segment_size):
-            means.append(np.mean(values[i:i+segment_size]))
-        return means
-    
-    loss_list = get_segmented_means(loss_list, 100)
-    rec_loss_list = get_segmented_means(rec_loss_list, 100)
-    sim_intrinsic_list = get_segmented_means(sim_intrinsic_list, 100)
-
-    return loss_list, rec_loss_list, sim_intrinsic_list
 
 if __name__ == '__main__':
     main()

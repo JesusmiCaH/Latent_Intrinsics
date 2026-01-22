@@ -42,7 +42,7 @@ import torchvision.utils as vutils
 from PIL import Image
 from diffusion_extractor import StableDiffusion
 from PIL import ImageFilter, ImageOps
-from utils.MiT_dataset_utils import MIT_Dataset_sequence
+from data_utils.MiT_dataset_utils import MIT_Dataset_sequence
 from pytorch_ssim import SSIM as compute_SSIM_loss
 from pytorch_losses import gradient_loss
 

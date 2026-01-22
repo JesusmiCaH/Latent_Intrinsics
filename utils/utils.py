@@ -219,7 +219,7 @@ def parallel_load_image(img_path_list, data_filter = '/dir*.jpg'):
         return batch
     data_loader = torch.utils.data.DataLoader(
         dataset, sampler=None,
-        batch_size=10,
+        batch_size=16,
         num_workers=8,
         pin_memory=False,
         drop_last=False,
@@ -230,7 +230,7 @@ def parallel_load_image(img_path_list, data_filter = '/dir*.jpg'):
     early_quitter = 0
     for images in tqdm.tqdm(data_loader):
         images_list += images
-        early_quitter += 1
+        # early_quitter += 1
         # if early_quitter >= 5:
         #     break
 

@@ -43,7 +43,7 @@ from PIL import Image
 from models import unets
 import tqdm
 from utils.utils import affine_crop_resize
-from utils.MiT_dataset_utils import MIT_Dataset_Normal, MIT_Dataset
+from data_utils.MiT_dataset_utils import MIT_Dataset_Normal, MIT_Dataset
 from skimage.metrics import structural_similarity as ssim
 
 class DINO_extractor():
