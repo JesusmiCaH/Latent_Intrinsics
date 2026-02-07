@@ -5,7 +5,6 @@ from dinov3_utils.backbone_out import _get_backbone_out_indices, BackboneLayersS
 from . import dinov3
 from transformers import AutoModel
 # from .ViTDecoder_CNN import ViTDecoder
-from .dinov3_decoder_ViT import *
 
 class DINOv3VAE(nn.Module):
     def __init__(

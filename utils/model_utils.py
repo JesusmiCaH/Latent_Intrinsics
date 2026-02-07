@@ -126,8 +126,6 @@ def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path)
         np_img_list = []
         
         for img in img_list:
-            print("img.shape", img.shape)
-        for img in img_list:
             img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 224, 224).permute(0, 3, 1, 4, 2).reshape(224*grid_size, 224*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
             np_img_list.append(img)
             np_img_list.append(white_space)
@@ -174,8 +172,6 @@ def plot_relight_img_train_MF(vae, lighting_enc, model, meanflow, input_img, ref
         white_space = (np.ones((224*grid_size, 20, 3)).astype(np.float32) * 255).astype(np.uint8)
         np_img_list = []
         
-        for img in img_list:
-            print("img.shape", img.shape)
         for img in img_list:
             img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 224, 224).permute(0, 3, 1, 4, 2).reshape(224*grid_size, 224*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
             np_img_list.append(img)

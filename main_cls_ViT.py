@@ -249,7 +249,7 @@ def main_worker(gpu, ngpus_per_node, args):
     rec_loss_list = []
     sim_intrinsic_list = []
 
-    for epoch in range(args.start_epoch, args.start_epoch+120):
+    for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
         if args.distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
         # Pass lists to be updated in-place
@@ -303,13 +303,13 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
 
         rnd_normal = torch.randn([input_img.shape[0], 1, 1, 1], device=input_img.device)
         sigma = (rnd_normal * P_std + P_mean).exp()
-        if epoch >= 60:
+        if epoch >= args.epochs/2:
             sigma = sigma * 0
 
         noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
-        # Removed break condition: if i > 600: break
+        # if i>2: break
     
         with torch.cuda.amp.autocast():
             intri_input, extri_input = model.forward_encoder(noisy_input_img)    # no masking
@@ -354,43 +354,42 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
             pbar.set_postfix({'loss': loss.item(), 'rec_loss': rec_loss.item(), 'sim_int': sim_intrinsic.item()})
 
         # Periodic Saving and Plotting every 1000 steps
-        if i % 1000 == 0 and i > 0:
-             if args.is_master:
-                    print("💾 Saving checkpoint and plotting...")
-                    save_checkpoint({
-                        'epoch': epoch + 1,
-                        'state_dict': model.state_dict(),
-                        'optimizer' : optimizer.state_dict(),
-                        'scaler': scaler.state_dict(),
-                    }, False, filename = '{}/last.pth.tar'.format(args.save_folder_path))
+        if i % 2000 == 0 and i > 0:
+            if args.is_master:
+                print("💾 Saving checkpoint and plotting...")
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                    'scaler': scaler.state_dict(),
+                }, False, filename = '{}/last.pth.tar'.format(args.save_folder_path))
 
-                    # Plot relighting result
-                    target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
-                    plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
+                # Plot relighting result
+                target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
+                plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
 
-                    # Plot smoothed curves with raw data background
+                record_start_step = 500
+                # Plot smoothed curves with raw data background
+                if len(loss_list) > 500:
                     plt.figure(figsize=(20,5))
                     
                     plt.subplot(1,3,1)
-                    plt.plot(loss_list, alpha=0.3, color='blue', label='Total Loss')
-                    if len(loss_list) > 500:
-                        plt.plot(np.arange(len(smooth_curve(loss_list))) + (500-1), smooth_curve(loss_list), color='blue', label='Total Loss (Smoothed)')
+                    plt.plot(np.arange(500, len(loss_list)), loss_list[500:], alpha=0.3, color='blue', label='Total Loss')
+                    plt.plot(np.arange(len(smooth_curve(loss_list))) + (500-1), smooth_curve(loss_list), color='blue', label='Total Loss (Smoothed)')
                     plt.title('total loss')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
                     
                     plt.subplot(1,3,2)
-                    plt.plot(rec_loss_list, alpha=0.3, color='orange', label='Reconstruction Loss')
-                    if len(rec_loss_list) > 500:
-                        plt.plot(np.arange(len(smooth_curve(rec_loss_list))) + (500-1), smooth_curve(rec_loss_list), color='orange', label='Reconstruction Loss (Smoothed)')
+                    plt.plot(np.arange(500, len(rec_loss_list)), rec_loss_list[500:], alpha=0.3, color='orange', label='Reconstruction Loss')
+                    plt.plot(np.arange(len(smooth_curve(rec_loss_list))) + (500-1), smooth_curve(rec_loss_list), color='orange', label='Reconstruction Loss (Smoothed)')
                     plt.title('reconstruction loss')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
                     
                     plt.subplot(1,3,3)
-                    plt.plot(sim_intrinsic_list, alpha=0.3, color='green', label='Intrinsic Similarity')
-                    if len(sim_intrinsic_list) > 500:
-                        plt.plot(np.arange(len(smooth_curve(sim_intrinsic_list))) + (500-1), smooth_curve(sim_intrinsic_list), color='green', label='Intrinsic Similarity (Smoothed)')
+                    plt.plot(np.arange(500, len(sim_intrinsic_list)), sim_intrinsic_list[500:], alpha=0.3, color='green', label='Intrinsic Similarity')
+                    plt.plot(np.arange(len(smooth_curve(sim_intrinsic_list))) + (500-1), smooth_curve(sim_intrinsic_list), color='green', label='Intrinsic Similarity (Smoothed)')
                     plt.title('intrinsic similarity')
                     plt.legend()
                     plt.grid(True, alpha=0.3)

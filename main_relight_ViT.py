@@ -79,7 +79,7 @@ parser.add_argument('--setting', default='0_0_0', type=str,
                     help='url used to set up distributed training')
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
-parser.add_argument('--local_rank', default=-1, type=int,
+parser.add_argument('--local-rank', default=-1, type=int,
                     help='local rank for distributed training')
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
@@ -98,6 +98,7 @@ parser.add_argument("--gpus", type=int, default=1)
 parser.add_argument("--data_path", type=str, default=".")
 parser.add_argument("--load_ckpt", type=str, default=".")
 parser.add_argument("--dino_size", type=str, default='vit_base')
+parser.add_argument("--dataset", type=str, default='mit', choices=['mit', 'jhu'])
 
 
 args = parser.parse_args()

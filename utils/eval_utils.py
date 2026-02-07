@@ -44,6 +44,7 @@ from models import unets
 import tqdm
 from utils.utils import affine_crop_resize
 from data_utils.MiT_dataset_utils import MIT_Dataset_Normal, MIT_Dataset
+from data_utils.JHU_dataset_utils import JHU_Dataset
 from skimage.metrics import structural_similarity as ssim
 
 class DINO_extractor():
@@ -115,7 +116,16 @@ def get_eval_relight_dataloader(args, eval_pair_folder_shift = 5, eval_pair_ligh
                     mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]
                 ),
     ])]
-    train_dataset = MIT_Dataset(args.data_path, transform_test, eval_mode = True)
+    if args.dataset == 'mit':
+        train_dataset = MIT_Dataset(args.data_path, transform_test, eval_mode = True)
+    elif args.dataset == 'jhu':
+        # Auto-correct data_path if it points to mit or default, and jhu dataset exists
+        if ('mit' in args.data_path or args.data_path == '.') and os.path.exists('data/jhu_dataset'):
+            print(f"⚠️ Switching data_path from {args.data_path} to data/jhu_dataset for JHU evaluation")
+            args.data_path = 'data/jhu_dataset'
+        train_dataset = JHU_Dataset(args.data_path, transform_test, eval_mode = True)
+    else:
+        raise ValueError(f"Unknown dataset: {args.dataset}")
     print('NUM of training images: {}'.format(len(train_dataset)))
     train_sampler = None
 
@@ -439,5 +449,10 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
 
     error = torch.cat(recon_error).mean().item()
     correct_error = torch.cat(correct_recon_error).mean().item()
-    os.system(f'touch {args.save_folder_path}/correct_result_{epoch}_{error}_{np.array(ssim_list).mean()}_{correct_error}_{np.array(correct_ssim_list).mean()}')
+    
+    # Improved logging: write to file instead of touch
+    log_file = os.path.join(args.save_folder_path, 'eval_results.txt')
+    with open(log_file, 'a') as f:
+        f.write(f'Epoch: {epoch}, Error: {error}, SSIM: {np.array(ssim_list).mean()}, Correct_Error: {correct_error}, Correct_SSIM: {np.array(correct_ssim_list).mean()}\n')
+    # os.system(f'touch {args.save_folder_path}/correct_result_{epoch}_{error}_{np.array(ssim_list).mean()}_{correct_error}_{np.array(correct_ssim_list).mean()}')
     return error, np.array(ssim_list).mean()

@@ -37,7 +37,8 @@ import builtins
 from PIL import Image
 import torchvision
 import tqdm
-from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
+from utils.utils import affine_crop_resize, multi_affine_crop_resize
+from data_utils.MiT_dataset_utils import MIT_Dataset, MIT_Dataset_PreLoad
 from models.unets import UNet
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
@@ -77,8 +78,6 @@ parser.add_argument('--setting', default='0_0_0', type=str,
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
 parser.add_argument('--local_rank', default=-1, type=int,
-                    help='local rank for distributed training')
-parser.add_argument('--local-rank', default=-1, type=int,
                     help='local rank for distributed training')
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')

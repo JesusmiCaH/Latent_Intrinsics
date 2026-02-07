@@ -231,7 +231,7 @@ def parallel_load_image(img_path_list, data_filter = '/dir*.jpg'):
     for images in tqdm.tqdm(data_loader):
         images_list += images
         # early_quitter += 1
-        # if early_quitter >= 5:
+        # if early_quitter >= 1:
         #     break
 
     return images_list
