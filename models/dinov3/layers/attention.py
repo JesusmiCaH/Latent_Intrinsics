@@ -8,7 +8,7 @@ from typing import List, Tuple
 
 import torch
 import torch.nn.functional as F
-from dinov3_utils import cat_keep_shapes, uncat_with_shapes
+from ..utils.utils import cat_keep_shapes, uncat_with_shapes
 from torch import Tensor, nn
 
 

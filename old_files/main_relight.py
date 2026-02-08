@@ -94,7 +94,7 @@ parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
-parser.add_argument("--data_path", type=str, default=".")
+parser.add_argument("--data_path", type=str, default="dataset")
 parser.add_argument("--load_ckpt", type=str, default=".")
 
 args = parser.parse_args()

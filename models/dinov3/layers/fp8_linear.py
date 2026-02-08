@@ -7,8 +7,8 @@ import re
 
 import torch
 
-from layers.attention import LinearKMaskedBias
-from dinov3_utils import named_replace
+from .attention import LinearKMaskedBias
+from ..utils.utils import named_replace
 
 # avoid division by zero when calculating scale
 EPS = 1e-12

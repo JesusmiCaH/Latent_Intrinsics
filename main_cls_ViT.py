@@ -100,7 +100,7 @@ parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
-parser.add_argument("--data_path", type=str, default=".")
+parser.add_argument("--data_path", type=str, default="dataset")
 parser.add_argument("--dino_size", type=str, default='vit_base')
 
 args = parser.parse_args()
@@ -117,6 +117,8 @@ def init_model(args):
         },
         encoder_intermediate = 'FOUR_EVEN_INTERVALS',
         with_extra_tokens = True,
+        train_encoder = True,
+        extrinsic_token_idx = None, # Use CLS token
     )
     # model = RadioVAE()
     model.cuda(args.gpu)
@@ -225,9 +227,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     #train_dataset = MIT_Dataset(args.data_path, transform_train)
     MiT_train_dataset = MIT_Dataset_PreLoad(os.path.join(args.data_path, 'mit_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
-    JHU_train_dataset = JHU_Dataset_PreLoad(os.path.join(args.data_path, 'jhu_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
+    # JHU_train_dataset = JHU_Dataset_PreLoad(os.path.join(args.data_path, 'jhu_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
 
-    print('NUM of training images: {}+{}'.format(len(MiT_train_dataset), len(JHU_train_dataset)))
+    print('NUM of training images: {}'.format(len(MiT_train_dataset)))
 
     # if args.distributed:
     #     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle = True, drop_last = True)
@@ -236,7 +238,7 @@ def main_worker(gpu, ngpus_per_node, args):
     train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        torch.utils.data.ConcatDataset([MiT_train_dataset, JHU_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
+        torch.utils.data.ConcatDataset([MiT_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last = True, persistent_workers = True)
 
     if not args.multiprocessing_distributed or (args.multiprocessing_distributed

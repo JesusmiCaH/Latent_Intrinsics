@@ -32,29 +32,23 @@ from torch import autograd
 from torch.optim import AdamW
 from typing import Union, List, Optional, Callable
 import pdb
-from utils.utils import AverageMeter, ProgressMeter, init_ema_model, update_ema_model
+from utils import  AverageMeter, ProgressMeter, init_ema_model, update_ema_model
 import builtins
 from PIL import Image
 import torchvision
 import tqdm
-from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-
+from utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
+from unets import UNet
 import copy
-from utils.pytorch_ssim import SSIM as compute_SSIM_loss
-from utils.pytorch_losses import gradient_loss
-from utils.model_utils import plot_relight_img_train_MF, compute_logdet_loss, intrinsic_loss_ViT, save_checkpoint
-
-from utils.utils import MIT_Dataset, affine_crop_resize, multi_affine_crop_resize, MIT_Dataset_PreLoad
-from diffusers import AutoencoderKL
-from models.MF_DiT import MFDiT
-from utils.meanflow import MeanFlow
-from models.vae_lighting_encoder import Lighting_Encoder
+from pytorch_ssim import SSIM as compute_SSIM_loss
+from pytorch_losses import gradient_loss
+from model_utils import plot_relight_img_train, compute_logdet_loss, intrinsic_loss,save_checkpoint
 
 #from sklearn.metrics import average_precision_score
 warnings.filterwarnings("ignore")
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=10, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -72,8 +66,6 @@ parser.add_argument('--save_freq', default=5, type=int,
                      help='print frequency (default: 10)')
 parser.add_argument('--resume', action = 'store_true',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('--mae_ckpth', default='mae_visualize_vit_large_ganloss.pth', type=str, metavar='PATH',
-                    help='path to mae checkpoint (default: none)')
 parser.add_argument('--world-size', default=-1, type=int,
                         help='number of nodes for distributed training')
 parser.add_argument('--rank', default=-1, type=int,
@@ -105,55 +97,26 @@ parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
-parser.add_argument("--data_path", type=str, default=".")
-parser.add_argument("--dino_size", type=str, default='vit_base')
-parser.add_argument("--lighting_dim", type=int, default=16)
+parser.add_argument("--data_path", type=str, default="dataset")
 
 args = parser.parse_args()
 
 
-def init_models_MF(args):
-    vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").cuda(args.gpu)
-    model = MFDiT(
-        input_size=args.img_size//8,  # 224/8
-        patch_size=2,
-        in_channels=4,
-        dim=384,
-        extri_dim=args.lighting_dim,
-        depth=8,
-        num_heads=6,
-        num_classes=1000,
-    )
-
+def init_model(args):
+    model = UNet(img_resolution = 256, in_channels = 3, out_channels = 3,
+                     num_blocks_list = [1, 2, 2, 4, 4, 4], attn_resolutions = [0], model_channels = 32,
+                     channel_mult = [1, 2, 4, 4, 8, 16], affine_scale = float(args.affine_scale))
     model.cuda(args.gpu)
-
+    ema_model = copy.deepcopy(model)
+    ema_model.cuda(args.gpu)
+    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True,
+    broadcast_buffers=False)
+    ema_model = torch.nn.parallel.DistributedDataParallel(ema_model, device_ids=[args.gpu], find_unused_parameters=True,
+    broadcast_buffers=False)
+    init_ema_model(model, ema_model)
     optimizer = AdamW(model.parameters(),
                 lr= args.learning_rate, weight_decay = args.weight_decay)
-
-    # May consider accelerator in the future
-    return vae, model, optimizer
-
-def init_lighting_encoder(args):
-    lighting_enc = Lighting_Encoder(latent_dim=384, out_dim=args.lighting_dim)
-
-    lighting_enc.cuda(args.gpu)
-    lighting_optimizer = AdamW(lighting_enc.parameters(),
-                lr= args.learning_rate, weight_decay = args.weight_decay)
-    return lighting_enc, lighting_optimizer
-
-
-def init_meanflow(args):
-    meanflow = MeanFlow(channels=4,
-                        image_size=args.img_size//8,
-                        num_classes=1000,
-                        normalizer=['mean_std', 0.0, 1/0.18215],
-                        flow_ratio=0.50,
-                        time_dist=['lognorm', -0.4, 1.0],
-                        cfg_ratio=0.10,
-                        cfg_scale=2.0,
-                        # experimental
-                        cfg_uncond='u')
-    return meanflow
+    return model, ema_model, optimizer
 
 def main():
     torch.manual_seed(2)
@@ -216,12 +179,11 @@ def main_worker(gpu, ngpus_per_node, args):
     args.save_folder_path = save_folder_path
     args.is_master = args.rank == 0
 
-    vae, model, optimizer = init_models_MF(args)
-    lighting_enc, lighting_optimizer = init_lighting_encoder(args)
-
-    meanflow = init_meanflow(args)
+    model, ema_model, optimizer = init_model(args)
     torch.cuda.set_device(args.gpu)
 
+    optimizer = AdamW(model.parameters(),
+                lr= args.learning_rate, weight_decay = args.weight_decay)
     scaler = torch.cuda.amp.GradScaler()
 
     args.start_epoch = 0
@@ -237,6 +199,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 checkpoint = torch.load(args.resume, map_location=loc)
             args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
+            ema_model.load_state_dict(checkpoint['ema_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             scaler.load_state_dict(checkpoint['scaler'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -245,12 +208,13 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    transform_train = [affine_crop_resize(size = (224, 224), scale = (0.2, 1.0)),
-        transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(0.5, 0.5),
-        ])
-    ]
+    transform_train = [affine_crop_resize(size = (256, 256), scale = (0.2, 1.0)),
+    transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(
+                    mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]
+                ),
+    ])]
 
     #train_dataset = MIT_Dataset(args.data_path, transform_train)
     train_dataset = MIT_Dataset_PreLoad(args.data_path, transform_train, total_split = args.world_size, split_id = args.rank)
@@ -273,43 +237,47 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(args.start_epoch, 120):
         if args.distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
-        loss_pack = train_D(train_loader, meanflow, vae, model, scaler, optimizer, lighting_enc, lighting_optimizer, epoch, args)
+        loss_pack = train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args)
 
-        record_time = 1
-        if epoch == record_time:
-            loss_list, mse_val_list = loss_pack
-        elif epoch > record_time:
+        if epoch == 0:
+            loss_list, rec_loss_list, sim_intrinsic_list = loss_pack
+        else:
             loss_list += loss_pack[0]
-            mse_val_list += loss_pack[1]
+            rec_loss_list += loss_pack[1]
+            sim_intrinsic_list += loss_pack[2]
 
-            print("📈", len(loss_list), len(mse_val_list))
-            if args.is_master:
-                if epoch % 2 == 0 and epoch != 0:
-                    save_checkpoint({
-                        'epoch': epoch + 1,
-                        'state_dict': model.state_dict(),
-                        'optimizer' : optimizer.state_dict(),
-                        'scaler': scaler.state_dict(),
-                    }, False, filename = '{}/last.pth.tar'.format(save_folder_path))
 
-                    plt.figure(figsize=(20,5))
-                    plt.subplot(1,2,1)
-                    plt.plot(loss_list)
-                    plt.title('total loss')
-                    plt.subplot(1,2,2)
-                    plt.plot(mse_val_list)
-                    plt.title('MSE loss')
+        if args.is_master:
+            if epoch % 2 == 0 and epoch != 0:
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                    'ema_state_dict': ema_model.state_dict(),
+                    'scaler': scaler.state_dict(),
+                }, False, filename = '{}/last.pth.tar'.format(save_folder_path))
 
-                    plt.savefig('{}/training_curves.png'.format(save_folder_path))
-                    plt.close('all')
-                    
-                if epoch % 20 == 0 and epoch != 0:
-                    save_checkpoint({
-                        'epoch': epoch + 1,
-                        'state_dict': model.state_dict(),
-                        'optimizer' : optimizer.state_dict(),
-                        'scaler': scaler.state_dict(),
-                    },False , filename = '{}/{}.pth.tar'.format(save_folder_path, epoch))
+                plt.figure(figsize=(20,5))
+                plt.subplot(1,3,1)
+                plt.plot(loss_list, color='red')
+                plt.title('total loss')
+                plt.subplot(1,3,2)
+                plt.plot(rec_loss_list, color='red')
+                plt.title('reconstruction loss')
+                plt.subplot(1,3,3)
+                plt.plot(sim_intrinsic_list, color='red')
+                plt.title('intrinsic similarity')
+                plt.savefig('{}/training_curves.png'.format(save_folder_path))
+                plt.close('all')
+
+            if epoch % 20 == 0 and epoch != 0:
+                save_checkpoint({
+                'epoch': epoch + 1,
+                'state_dict': model.state_dict(),
+                'optimizer' : optimizer.state_dict(),
+                'ema_state_dict': ema_model.state_dict(),
+                'scaler': scaler.state_dict(),
+                },False , filename = '{}/{}.pth.tar'.format(save_folder_path, epoch))
 
 def print_gradients(model):
     max_grad = 0
@@ -320,9 +288,9 @@ def print_gradients(model):
             max_norm = max(max_norm, p.data.norm(2))
     return max_grad, max_norm
 
-def train_D(train_loader, meanflow, vae, model, scaler, optimizer, lighting_enc, lighting_optimizer, epoch, args):
+def train_D(train_loader, model, scaler, optimizer, ema_model, epoch, args):
     loss_name = [
-                'loss', 'mse_val',
+                'loss','logdet', 'light_logdet', 'intrinsic_sim',
                 'GPU Mem', 'Time', 'pe', 'ge']
     moco_loss_meter = [AverageMeter(name, ':6.3f') for name in loss_name]
     progress = ProgressMeter(
@@ -337,8 +305,13 @@ def train_D(train_loader, meanflow, vae, model, scaler, optimizer, lighting_enc,
     sigma_data = 0.5
 
     loss_list = []
-    mse_val_list = []
+    rec_loss_list = []
+    sim_intrinsic_list = []
+
+    logdet_loss = compute_logdet_loss()
+    ssim_loss = compute_SSIM_loss()
     for i, (input_img, ref_img) in enumerate(train_loader):
+
         input_img = input_img.to(args.gpu)
         ref_img = ref_img.to(args.gpu)
 
@@ -347,19 +320,30 @@ def train_D(train_loader, meanflow, vae, model, scaler, optimizer, lighting_enc,
         if epoch >= 60:
             sigma = sigma * 0
 
-        noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
+        noisy_input_img = input_img + torch.randn_like(input_img) * sigma
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
-        with torch.no_grad():
-            x_extri = vae.encode(noisy_input_img.float()).latent_dist.sample()
-            x_intri = vae.encode(noisy_ref_img.float()).latent_dist.sample()
-
-        if i >= 200:
+        if i >= 70:
             break
 
         with torch.cuda.amp.autocast():
-            lighting_code = lighting_enc(x_extri)
-            loss, mse_val = meanflow.loss(model, x_intri, x_extri, c=lighting_code)       
+            intrinsic_input, extrinsic_input = model(noisy_input_img, run_encoder = True)
+            intrinsic_ref, extrinsic_ref = model(noisy_ref_img, run_encoder = True)
+
+            mask = (torch.rand(input_img.shape[0]) > 0.9).float().to(args.gpu).reshape(-1,1,1,1).float() # 10% mask
+            intrinsic = [i_input * mask + i_ref * (1 - mask) for i_input, i_ref in zip(intrinsic_input, intrinsic_ref)]
+
+            recon_img = model([intrinsic, extrinsic_input], run_encoder = False).float()
+        
+        logdet_pred, logdet_target = logdet_loss(intrinsic_input)
+        logdet_pred_ext, logdet_target_ext = logdet_loss([extrinsic_input])
+        sim_intrinsic = intrinsic_loss(intrinsic_input, intrinsic_ref)
+        rec_loss = nn.MSELoss()(recon_img,input_img)
+        rec_loss = 10 * rec_loss + \
+                0.1 * (1 - ssim_loss(recon_img,input_img)) + gradient_loss(recon_img,input_img)
+        loss = rec_loss + args.reg_weight * ((logdet_pred - logdet_target) ** 2).mean() + \
+                          args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() + \
+                          - args.intrinsics_loss_weight * sim_intrinsic
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -367,11 +351,10 @@ def train_D(train_loader, meanflow, vae, model, scaler, optimizer, lighting_enc,
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
+        update_ema_model(model, ema_model, 0.999)
 
-        t1 = time.time()        
-        # print("🛠️", loss, sim_intrinsic)
-
-        for val_id, val in enumerate([loss, mse_val,
+        t1 = time.time()
+        for val_id, val in enumerate([rec_loss, logdet_pred[:-1].mean(), logdet_pred[-1], sim_intrinsic,
                         torch.cuda.max_memory_allocated() / (1024.0 * 1024.0), t1 - t0, pe, ge
                     ]):
             if not isinstance(val, float) and not isinstance(val, int):
@@ -382,18 +365,15 @@ def train_D(train_loader, meanflow, vae, model, scaler, optimizer, lighting_enc,
         torch.cuda.reset_peak_memory_stats()
 
         loss_list.append(loss.item())
-        mse_val_list.append(mse_val.item())
+        rec_loss_list.append(rec_loss.item())
+        sim_intrinsic_list.append(sim_intrinsic.item())
 
     if args.gpu == 0 and epoch % 5 == 0:
         target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
-        plot_relight_img_train_MF(
-            vae, lighting_enc, model, meanflow,
-            input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i)
-            )
+        plot_relight_img_train(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
 
     torch.distributed.barrier()
-
-    return loss_list, mse_val_list
+    return loss_list, rec_loss_list, sim_intrinsic_list
 
 if __name__ == '__main__':
     main()

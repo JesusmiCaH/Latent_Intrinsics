@@ -95,7 +95,7 @@ parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
-parser.add_argument("--data_path", type=str, default=".")
+parser.add_argument("--data_path", type=str, default="dataset")
 parser.add_argument("--load_ckpt", type=str, default=".")
 parser.add_argument("--dino_size", type=str, default='vit_base')
 parser.add_argument("--dataset", type=str, default='mit', choices=['mit', 'jhu'])
@@ -115,6 +115,8 @@ def init_model(args):
         },
         encoder_intermediate = 'FOUR_EVEN_INTERVALS',
         with_extra_tokens = True,
+        train_encoder = True,
+        extrinsic_token_idx = None, # Use CLS token
     )
     model.cuda(args.gpu)
 

@@ -120,9 +120,9 @@ def get_eval_relight_dataloader(args, eval_pair_folder_shift = 5, eval_pair_ligh
         train_dataset = MIT_Dataset(args.data_path, transform_test, eval_mode = True)
     elif args.dataset == 'jhu':
         # Auto-correct data_path if it points to mit or default, and jhu dataset exists
-        if ('mit' in args.data_path or args.data_path == '.') and os.path.exists('data/jhu_dataset'):
-            print(f"⚠️ Switching data_path from {args.data_path} to data/jhu_dataset for JHU evaluation")
-            args.data_path = 'data/jhu_dataset'
+        if ('mit' in args.data_path or args.data_path == '.') and os.path.exists('dataset/jhu_dataset'):
+            print(f"⚠️ Switching data_path from {args.data_path} to dataset/jhu_dataset for JHU evaluation")
+            args.data_path = 'dataset/jhu_dataset'
         train_dataset = JHU_Dataset(args.data_path, transform_test, eval_mode = True)
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
