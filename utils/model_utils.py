@@ -1,4 +1,5 @@
 import torch, pdb
+import shutil
 import torch.nn as nn
 import torch.nn.parallel
 import torch.distributed as dist
@@ -64,6 +65,7 @@ class compute_logdet_loss():
 
 @torch.no_grad()
 def plot_relight_img_train(model, input_img, ref_img, target_img, save_path):
+    was_training = model.training
     model.eval()
 
     img1 = input_img
@@ -98,9 +100,11 @@ def plot_relight_img_train(model, input_img, ref_img, target_img, save_path):
             np_img_list.append(white_space)
         Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
     save_img([img1, img2, img3, edm_gen_img_e1_i1, edm_gen_img_e2_i1, edm_gen_img_e3_i1], save_path)
+    model.train(was_training)
 
 @torch.no_grad()
 def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path):
+    was_training = model.training
     model.eval()
 
     img1 = input_img
@@ -132,53 +136,9 @@ def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path)
         Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
     
     save_img([img1, img2, img3, recon_img_e1_i1, recon_img_e2_i1, recon_img_e3_i1], save_path)
+    model.train(was_training)
 
 
-@torch.no_grad()
-def plot_relight_img_train_MF(vae, lighting_enc, model, meanflow, input_img, ref_img, target_img, save_path):
-    model.eval()
-
-    img1 = input_img
-    img2 = ref_img
-    img3 = target_img
-
-    # Skips for intrinsics
-    with torch.no_grad():
-        x1 = vae.encode(input_img.float()).latent_dist.sample()* 0.18215   
-        x2 = vae.encode(ref_img.float()).latent_dist.sample()* 0.18215
-        x3 = vae.encode(target_img.float()).latent_dist.sample()* 0.18215
-
-        lc1 = lighting_enc(x1)
-        lc2 = lighting_enc(x2)
-        lc3 = lighting_enc(x3)
-    
-    z_e1_i1 = meanflow.evaluate(model, x1, c=lc1, sample_steps=5, device=input_img.device)
-    z_e2_i1 = meanflow.evaluate(model, x1, c=lc2, sample_steps=5, device=input_img.device)
-    z_e3_i1 = meanflow.evaluate(model, x1, c=lc3, sample_steps=5, device=input_img.device)
-
-    with torch.no_grad():
-        # Reconstruction
-        recon_img_e1_i1 = vae.decode(z_e1_i1).sample[:25].float()
-        recon_img_e1_i1 = recon_img_e1_i1 * 0.5 + 0.5
-        recon_img_e2_i1 = vae.decode(z_e2_i1).sample[:25].float()
-        recon_img_e2_i1 = recon_img_e2_i1 * 0.5 + 0.5
-        recon_img_e3_i1 = vae.decode(z_e3_i1).sample[:25].float()
-        recon_img_e3_i1 = recon_img_e3_i1 * 0.5 + 0.5
-
-    print("🚕", img1.shape, recon_img_e1_i1.shape)
-
-    def save_img(img_list, name):
-        grid_size = 4
-        white_space = (np.ones((224*grid_size, 20, 3)).astype(np.float32) * 255).astype(np.uint8)
-        np_img_list = []
-        
-        for img in img_list:
-            img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 224, 224).permute(0, 3, 1, 4, 2).reshape(224*grid_size, 224*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
-            np_img_list.append(img)
-            np_img_list.append(white_space)
-        Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
-    
-    save_img([img1, img2, img3, recon_img_e1_i1, recon_img_e2_i1, recon_img_e3_i1], save_path)
 
 class FullGatherLayer(torch.autograd.Function):
     """

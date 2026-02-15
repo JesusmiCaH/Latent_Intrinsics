@@ -14,6 +14,8 @@ class DINOv3VAE(nn.Module):
             encoder_intermediate: str|tuple, 
             extrinsic_dim = 16, 
             with_extra_tokens = False,
+            conditioning: str = "ada_ln",
+            affine_scale: float = 5e-3,
             decoder_cfg = None,
             train_encoder = True,
             lora_r = 16,
@@ -26,12 +28,18 @@ class DINOv3VAE(nn.Module):
         checkpoint = torch.load(dino_checkpoint_path)
         self.encoder.load_state_dict(checkpoint)
 
+        # Freeze base model
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        # Unfreeze storage tokens (registers) if we are using them for extrinsic
+        if extrinsic_token_idx is not None:
+            print(f"Unfreezing storage_tokens (registers) for extrinsic_token_idx={extrinsic_token_idx}")
+            for name, param in self.encoder.named_parameters():
+                if 'storage_tokens' in name:
+                    param.requires_grad = True
+        
         if train_encoder:
-            from peft import get_peft_model, LoraConfig, TaskType
-            # Freeze base model
-            for param in self.encoder.parameters():
-                param.requires_grad = False
-            
+            from peft import get_peft_model, LoraConfig, TaskType            
             peft_config = LoraConfig(
                 inference_mode=False, 
                 r=lora_r, 
@@ -42,9 +50,6 @@ class DINOv3VAE(nn.Module):
             self.encoder = get_peft_model(self.encoder, peft_config)
             self.encoder.print_trainable_parameters()
         else:
-            # Frozen
-            for param in self.encoder.parameters():
-                param.requires_grad = False
             self.encoder.eval()
 
         encoder_intermediate = BackboneLayersSet(encoder_intermediate)
@@ -70,7 +75,7 @@ class DINOv3VAE(nn.Module):
         # So we need upsample_factor=16 to get back to 224x224
         patch_size = encoder_cfg.get('patch_size', 16)
 
-        self.decoder = dinov3_decoder_base(patch_size=patch_size, extrinsic_dim=extrinsic_dim)
+        self.decoder = dinov3_decoder_base(patch_size=patch_size, extrinsic_dim=extrinsic_dim, conditioning=conditioning, affine_scale=affine_scale)
 
 
     def forward_encoder(self, x: torch.Tensor):

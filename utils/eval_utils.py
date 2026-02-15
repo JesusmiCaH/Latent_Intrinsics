@@ -39,12 +39,12 @@ import pdb
 from utils.utils import  AverageMeter, ProgressMeter, init_ema_model, update_ema_model
 import builtins
 import torchvision.utils as vutils
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from models import unets
 import tqdm
 from utils.utils import affine_crop_resize
-from data_utils.MiT_dataset_utils import MIT_Dataset_Normal, MIT_Dataset
-from data_utils.JHU_dataset_utils import JHU_Dataset
+from data_utils.MiT_dataset_utils import MIT_Dataset_Normal, MIT_Valset
+from data_utils.JHU_dataset_utils import JHU_Valset
 from skimage.metrics import structural_similarity as ssim
 
 class DINO_extractor():
@@ -117,13 +117,9 @@ def get_eval_relight_dataloader(args, eval_pair_folder_shift = 5, eval_pair_ligh
                 ),
     ])]
     if args.dataset == 'mit':
-        train_dataset = MIT_Dataset(args.data_path, transform_test, eval_mode = True)
+        train_dataset = MIT_Valset(f"{args.data_path}/mit_dataset", transform_test, eval_mode = True)
     elif args.dataset == 'jhu':
-        # Auto-correct data_path if it points to mit or default, and jhu dataset exists
-        if ('mit' in args.data_path or args.data_path == '.') and os.path.exists('dataset/jhu_dataset'):
-            print(f"⚠️ Switching data_path from {args.data_path} to dataset/jhu_dataset for JHU evaluation")
-            args.data_path = 'dataset/jhu_dataset'
-        train_dataset = JHU_Dataset(args.data_path, transform_test, eval_mode = True)
+        train_dataset = JHU_Valset(f"{args.data_path}/jhu_dataset", transform_test, eval_mode = True)
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
     print('NUM of training images: {}'.format(len(train_dataset)))
@@ -395,7 +391,6 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
     correct_ssim_list = []
     model.eval()
     for i, (img1, img2, img3) in enumerate(tqdm.tqdm(train_loader)):
-        print("🥑", img1.shape)
         img1 = img1.to(args.gpu)
         img2 = img2.to(args.gpu)
         img3 = img3.to(args.gpu)
@@ -418,19 +413,72 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
             # print("🔶 Reconstruction", img2[0,:,3,3], relight_img2[0,:,3,3])
             relight_img_0_out = model.forward_decoder(intrinsic1, extrinsic_0_out).clamp(-1, 1).float()
 
-        def save_img(img_list, name):
+        def save_img(img_list, name, titles=None):
             grid_size = 4
-            white_space = (np.ones((224*grid_size, 20, 3)).astype(np.float32) * 255).astype(np.uint8)
+            img_h = 224 * grid_size
+            img_w = 224 * grid_size
+            title_h = 120
+            total_h = img_h + title_h
+            
+            # Vertical separator (white space), now matches total height
+            white_space = (np.ones((total_h, 20, 3)).astype(np.float32) * 255).astype(np.uint8)
             np_img_list = []
             
-            for img in img_list:
+            for idx, img in enumerate(img_list):
+                # Process image grid
                 # img shape: b, 3, 224, 224
-                img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 224, 224).permute(0, 3, 1, 4, 2).reshape(224*grid_size, 224*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
-                np_img_list.append(img)
-                np_img_list.append(white_space)
+                grid = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5)
+                        .reshape(grid_size, grid_size, 3, 224, 224)
+                        .permute(0, 3, 1, 4, 2)
+                        .reshape(224*grid_size, 224*grid_size, 3) * 255)
+                grid = grid.cpu().data.numpy().astype(np.uint8)
+                
+                # Create title block
+                title_block = (np.ones((title_h, grid.shape[1], 3)).astype(np.float32) * 255).astype(np.uint8)
+                
+                if titles and idx < len(titles):
+                    pil_title = Image.fromarray(title_block)
+                    draw = ImageDraw.Draw(pil_title)
+                    # Try to load a nicer font, fallback to default
+                    try:
+                        # Common path on Linux systems
+                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 90)
+                    except:
+                        try:
+                            # Fallback 1
+                            font = ImageFont.truetype("arial.ttf", 90)
+                        except:
+                             # Fallback to default
+                            font = ImageFont.load_default()
+                            print("Warning: Using default font, size cannot be changed.")
+                    
+                    text = titles[idx]
+                    # Get text size
+                    try:
+                        _, _, w, h = draw.textbbox((0, 0), text, font=font)
+                    except AttributeError:
+                        w, h = draw.textsize(text, font=font)
+                    
+                    # Center text
+                    draw.text(((grid.shape[1]-w)/2, (title_h-h)/2), text, font=font, fill=(0, 0, 0))
+                    title_block = np.array(pil_title)
+                
+                # Combine title and grid vertically
+                full_col = np.concatenate([title_block, grid], axis=0)
+                np_img_list.append(full_col)
+                
+                # Add vertical separator if not the last image
+                if idx < len(img_list) - 1:
+                    np_img_list.append(white_space)
+
             Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
 
-        save_img([img1, img2, img3, relight_img2, relight_img_0_out], f'{args.save_folder_path}/relight_{epoch}_{i}')
+        if i % 10 == 0:
+            save_img(
+                [img1, img2, img3, relight_img2, relight_img_0_out], 
+                f'{args.save_folder_path}/relight_{epoch}_{i}',
+                titles=['Input', 'Target', 'Reference', 'Relit', 'Albedo']
+            )
 
         shift = (relight_img2 - img2).mean(dim = [2,3], keepdim = True)
         correct_relight_img2 = relight_img2 - shift
@@ -444,7 +492,7 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
         recon_error.append(torch.sqrt(torch.mean((relight_img2 - img2)**2,dim= [1,2,3])))
         correct_recon_error.append(torch.sqrt(torch.mean((correct_relight_img2 - img2)**2,dim= [1,2,3])))
 
-        if i >= 50:
+        if i >= 500:
             break
 
     error = torch.cat(recon_error).mean().item()

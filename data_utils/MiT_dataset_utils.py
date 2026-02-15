@@ -11,38 +11,55 @@ import json
 import torch.nn.functional as F
 from utils.utils import compute_rank_split, parallel_load_image
 
-
-class MIT_Dataset_PreLoad(data.Dataset):
-    def __init__(self, root, img_transform, epoch_multiplier = 10,
-                    total_split = 4, split_id = 0):
-        img_list = compute_rank_split(sorted(glob.glob(root + '/*')), total_split, split_id)
-        self.images = parallel_load_image(img_list)
+class MIT_Trainset(data.Dataset):
+    def __init__(self, root, img_transform, epoch_multiplier=10, total_split=1, split_id=0):
         self.epoch_multiplier = epoch_multiplier
         self.single_img_transform = img_transform[1]
         self.group_img_transform = img_transform[0]
-        print('init', len(self.images), img_list[0])
+        
+        # Get all scene folders
+        self.folder_list = sorted(glob.glob(root + '/*'))
+        # Distributed split
+        self.folder_list = compute_rank_split(self.folder_list, total_split, split_id)
+        
+        print(f'Online Dataset Init: {len(self.folder_list)} scenes, split {split_id}/{total_split}')
 
     def __len__(self):
-        return len(self.images) * self.epoch_multiplier * 25
+        # Same length calculation as PreLoad
+        return len(self.folder_list) * self.epoch_multiplier * 25
 
     def __getitem__(self, index):
-        index = index % (len(self.images) * 25)
+        # Same index logic
+        index = index % (len(self.folder_list) * 25)
         folder_idx = index // 25
-        images = self.images[folder_idx]
+        folder_path = self.folder_list[folder_idx]
+        
+        # Select two different random lights
+        light_idx1 = np.random.randint(25)
+        light_idx2 = (light_idx1 + 1 + np.random.randint(24)) % 25
+        
+        # Load images on the fly
+        # Using specific filename format dir_{}_mip2.jpg which matches the MIT dataset convention
+        try:
+            img1 = Image.open(os.path.join(folder_path, f'dir_{light_idx1}_mip2.jpg'))
+            img2 = Image.open(os.path.join(folder_path, f'dir_{light_idx2}_mip2.jpg'))
+        except FileNotFoundError:
+            # Fallback if filenames are different (e.g. random glob order in PreLoad)
+            # But based on ls check, they form dir_{}_mip2.jpg
+            # Just in case, pick random files from directory if specific ones fail?
+            # For now, assume format is consistent as validated by existing MIT_Dataset class
+            raise
 
-        light_index = np.random.randint(25)
-
-        img1 = Image.fromarray(images[light_index])
-        img2 = Image.fromarray(images[(light_index + 1 + np.random.randint(24)) % 25])
-
+        # Transforms
         img1 = self.single_img_transform(img1)
         img2 = self.single_img_transform(img2)
 
         if self.group_img_transform is not None:
             img1, img2 = self.group_img_transform([img1, img2])
+            
         return img1, img2
 
-class MIT_Dataset(data.Dataset):
+class MIT_Valset(data.Dataset):
     def __init__(self, root, img_transform, epoch_multiplier = 10,
                     eval_mode = False):
         self.epoch_multiplier = epoch_multiplier

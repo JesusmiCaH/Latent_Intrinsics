@@ -4,14 +4,83 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Optional
 
-from .dinov3.layers import SelfAttentionBlock, Mlp, SwiGLUFFN, RMSNorm, LayerScale
+from .dinov3.layers import SelfAttentionBlock, Mlp, SwiGLUFFN, RMSNorm, LayerScale, SelfAttention
 from .dinov3.vision_transformer import ffn_layer_dict, norm_layer_dict
 from .dinov3.layers.rope_position_encoding import RopePositionEmbedding
 from .conv_modules import ConvLayer, ConvPixelShuffleUpSampleLayer, InterpolateConvUpSampleLayer
 
-class DecoderBlock(nn.Module):
+class AdaLNModulator(nn.Module):
+    def __init__(self, dim, condition_dim):
+        super().__init__()
+        # Predict 6 parameters: 
+        # (scale_1, shift_1, gate_1, scale_2, shift_2, gate_2)
+        # scale/shift for Norms, gate for Residual scaling
+        
+        self.dim = dim
+        self.silu = nn.SiLU()
+        self.lin = nn.Linear(condition_dim, 6 * dim, bias=True)
+        
+        # Init zero for scale/shift to start as identity/zero effect?
+        # AdaLN-Zero initializes final projection to zero.
+        nn.init.constant_(self.lin.weight, 0)
+        nn.init.constant_(self.lin.bias, 0)
+
+    def forward(self, condition):
+        # condition: [B, C_cond]
+        res = self.lin(self.silu(condition)) # [B, 6*dim]
+        # Split
+        scale_1, shift_1, gate_1, scale_2, shift_2, gate_2 = res.chunk(6, dim=-1)
+        # Shapes: [B, dim] -> [B, 1, dim] for broadcasting
+        return (scale_1.unsqueeze(1), shift_1.unsqueeze(1), gate_1.unsqueeze(1),
+                scale_2.unsqueeze(1), shift_2.unsqueeze(1), gate_2.unsqueeze(1))
+
+class CrossAttention(nn.Module):
     """
-    Transformer-based Decoder Block with Hypercolumn Fusion and Lighting Injection.
+    Cross Attention Layer.
+    """
+    def __init__(self, dim, condition_dim, num_heads, qkv_bias=True, proj_bias=True):
+        super().__init__()
+        self.num_heads = num_heads
+        self.dim = dim
+        self.scale = (dim // num_heads) ** -0.5
+        
+        self.q = nn.Linear(dim, dim, bias=qkv_bias)
+        self.k = nn.Linear(condition_dim, dim, bias=qkv_bias)
+        self.v = nn.Linear(condition_dim, dim, bias=qkv_bias)
+        
+        self.proj = nn.Linear(dim, dim, bias=proj_bias)
+        # Norm is handled in DecoderBlock now
+        
+    def forward(self, x, condition):
+        # x: [B, N, C] (Queries)
+        # condition: [B, C] or [B, L, C] (Keys/Values)
+        
+        B, N, C = x.shape
+        if condition.dim() == 2:
+            condition = condition.unsqueeze(1) # [B, 1, C]
+            
+        q = self.q(x)
+        k = self.k(condition)
+        v = self.v(condition)
+        
+        # Reshape for multi-head
+        q = q.reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        k = k.reshape(B, condition.shape[1], self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        v = v.reshape(B, condition.shape[1], self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        
+        # Attention
+        x = F.scaled_dot_product_attention(q, k, v) # [B, nH, N, d]
+        
+        x = x.transpose(1, 2).flatten(2)
+        x = self.proj(x)
+        
+        return x
+
+class DecoderBlock_AdaLN(nn.Module):
+    """
+    Decoder Block with AdaLN-Zero conditioning.
+    Predicts scale/shift for norms and gatings for residuals.
+    No LayerScale used.
     """
     def __init__(
         self,
@@ -23,52 +92,135 @@ class DecoderBlock(nn.Module):
         norm_layer=nn.LayerNorm,
         act_layer=nn.GELU,
         ffn_layer=Mlp,
-        init_values: Optional[float] = None,
+        init_values: Optional[float] = None, # Unused here but kept for signature compatibility if needed
     ):
         super().__init__()
         
-        # Fusion of current tokens and skip connection
+        # Fusion
         self.fusion_proj = nn.Linear(dim + skip_dim, dim)
         self.norm_fusion = norm_layer(dim)
+        self.silu = nn.SiLU()
         
-        # Self-Attention Block (DINOv3 standard)
-        self.attn_block = SelfAttentionBlock(
+        # AdaLN Modulator (must be defined/passed, here we assume it is instantiated inside or passed?
+        # The design in DINOv3Decoder iterates blocks.
+        # It's better if the block manages its own modulator OR DINOv3Decoder passes the modulation params.
+        # But previous design: block has self.ada_ln. DINOv3Decoder passes light_emb.
+        # We will keep that.
+        self.ada_ln = AdaLNModulator(dim, dim)
+
+        # Block 1: Self-Attention
+        self.norm1 = norm_layer(dim)
+        self.attn = SelfAttention(
             dim=dim,
             num_heads=num_heads,
-            ffn_ratio=ffn_ratio,
             qkv_bias=True,
             proj_bias=True,
-            ffn_bias=True,
-            drop_path=drop_path,
-            norm_layer=norm_layer,
+            attn_drop=0.0,
+            proj_drop=0.0,
+        )
+        
+        # Block 2: FFN
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * ffn_ratio)
+        self.mlp = ffn_layer(
+            in_features=dim,
+            hidden_features=mlp_hidden_dim,
             act_layer=act_layer,
-            ffn_layer=ffn_layer,
-            init_values=init_values,
+            drop=0.0,
+            bias=True,
         )
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor, light_emb: torch.Tensor, rope: tuple = None) -> torch.Tensor:
-        """
-        Args:
-            x: [B, N, C]
-            skip: [B, N, C_skip]
-            light_emb: [B, C] - Lighting embedding to be used as CLS token
-            rope: (sin, cos) tuple for RoPE
-        """
-        # 1. Fuse x and skip
+        # 1. Fuse
         x = torch.cat([x, skip], dim=-1)
         x = self.fusion_proj(x)
         x = self.norm_fusion(x)
         
-        # 2. Inject Lighting as CLS token
-        # light_emb: [B, C] -> params [B, 1, C]
-        cls_token = light_emb.unsqueeze(1)
-        x = torch.cat([cls_token, x], dim=1) # [B, N+1, C]
+        # 2. Predict parameters
+        scale1, shift1, gate1, scale2, shift2, gate2 = self.ada_ln(light_emb)
         
-        # 3. Attention Block
-        x = self.attn_block(x, rope_or_rope_list=rope)
+        # 3. SA Block
+        x_norm1 = self.norm1(x)
+        x_norm1 = x_norm1 * (1 + scale1) + shift1
+        x = x + gate1 * self.attn(x_norm1, rope=rope)
         
-        # 4. Remove CLS token
-        x = x[:, 1:, :] # [B, N, C]
+        # 4. FFN Block
+        x_norm2 = self.norm2(x)
+        x_norm2 = x_norm2 * (1 + scale2) + shift2
+        x = x + gate2 * self.mlp(x_norm2)
+        
+        return x
+
+class DecoderBlock_CrossAttn(nn.Module):
+    """
+    Decoder Block with Cross-Attention conditioning.
+    Uses LayerScale.
+    """
+    def __init__(
+        self,
+        dim: int,
+        skip_dim: int,
+        num_heads: int,
+        ffn_ratio: float = 4.0,
+        drop_path: float = 0.0,
+        norm_layer=nn.LayerNorm,
+        act_layer=nn.GELU,
+        ffn_layer=Mlp,
+        affine_scale: float = 0.0,
+    ):
+        super().__init__()
+        
+        # Fusion
+        self.fusion_proj = nn.Linear(dim + skip_dim, dim)
+        self.norm_fusion = norm_layer(dim)
+        self.silu = nn.SiLU()
+        
+        # Block 1: Self-Attention
+        self.norm1 = norm_layer(dim)
+        self.self_attn = SelfAttention(
+            dim=dim,
+            num_heads=num_heads,
+            qkv_bias=True,
+            proj_bias=True,
+            attn_drop=0.0,
+            proj_drop=0.0,
+        )
+        
+        # Block 2: Cross-Attention
+        self.norm2 = norm_layer(dim)
+        self.cross_attn = CrossAttention(
+            dim=dim, 
+            condition_dim=dim, 
+            num_heads=num_heads,
+            qkv_bias=True
+        )
+        self.affine_scale = affine_scale
+        
+        # Block 3: FFN
+        self.norm3 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * ffn_ratio)
+        self.mlp = ffn_layer(
+            in_features=dim,
+            hidden_features=mlp_hidden_dim,
+            act_layer=act_layer,
+            drop=0.0,
+            bias=True,
+        )
+
+    def forward(self, x: torch.Tensor, skip: torch.Tensor, light_emb: torch.Tensor, rope: tuple = None) -> torch.Tensor:
+        # 1. Fuse
+        x = torch.cat([x, skip], dim=-1)
+        x = self.fusion_proj(x)
+        x = self.norm_fusion(x)
+        
+        # 2. SA (Residual)
+        x = x + self.self_attn(self.norm1(x), rope=rope)
+        
+        # 3. CA (Residual)
+        x = x + self.affine_scale * self.cross_attn(self.norm2(x), light_emb)
+        
+        # 4. FFN (Residual)
+        x = x + self.mlp(self.norm3(x))
         
         return x
 
@@ -154,6 +306,9 @@ class DINOv3Decoder(nn.Module):
         img_size: int = 224,
         patch_size: int = 16,
         upsample_mode: str = "pixel_shuffle",
+        conditioning: str = "ada_ln",
+        affine_scale: float = 0.0,
+        init_values: float = 0.1,
     ):
         super().__init__()
         
@@ -173,19 +328,35 @@ class DINOv3Decoder(nn.Module):
             num_heads=num_heads, 
             base=100.0 # Standard base
         )
+
+        # Affine value for conditioning
+        self.affine_scale = affine_scale
         
         # Decoder Blocks
         self.blocks = nn.ModuleList()
         for _ in range(num_decoder_layers):
-            self.blocks.append(
-                DecoderBlock(
+            if conditioning == "ada_ln":
+                block = DecoderBlock_AdaLN(
                     dim=hidden_dim,
-                    skip_dim=in_dim, # Assuming skip connections come from DINO encoder (same dim)
+                    skip_dim=in_dim,
                     num_heads=num_heads,
                     ffn_ratio=ffn_ratio,
-                    ffn_layer=Mlp, # Standard MLP
+                    ffn_layer=Mlp,
+                    init_values=None, # Not used in AdaLN
                 )
-            )
+            elif conditioning == "cross_attn":
+                block = DecoderBlock_CrossAttn(
+                    dim=hidden_dim,
+                    skip_dim=in_dim,
+                    num_heads=num_heads,
+                    ffn_ratio=ffn_ratio,
+                    ffn_layer=Mlp,
+                    affine_scale=affine_scale,
+                )
+            else:
+                raise ValueError(f"Unknown conditioning: {conditioning}")
+            
+            self.blocks.append(block)
             
         # Feature Pyramid Neck
         # Fuses 4 levels. Each projects to hidden_dim/2 maybe? Or hidden_dim//4 to keep concat size reasonable?
@@ -229,14 +400,7 @@ class DINOv3Decoder(nn.Module):
     
     def forward(self, intrinsics: List[torch.Tensor], extrinsic: torch.Tensor) -> torch.Tensor:
         """
-        intrinsics: List of DINO features [B, C, H, W] or [B, N, C]?? 
-                   DINOv3 usually returns [B, N, C].
-                   If [B, C, H, W], we need to flatten.
-                   Checking `dinov3_vae.py` -> `intrinsics` comes from `forward_encoder`.
-                   `forward_encoder` -> `outputs = self.encoder.get_intermediate_layers(..., reshape=True)`
-                   Wait, `dinov3_vae.py` sets `reshape=True`.
-                   So intrinsics are [B, C, H, W].
-                   
+        intrinsics: List of DINO features [B, C, H, W]
         extrinsic: [B, D]
         """
         # Ensure extrinsic is [B, D]
@@ -258,25 +422,6 @@ class DINOv3Decoder(nn.Module):
         rope = self.rope(H=H, W=W)
         
         decoder_outputs = []
-        
-        # Iterate Blocks
-        # We have 4 blocks. We need 4 skips.
-        # intrinsics has 4 elements? `encoder_intermediate = 'FOUR_EVEN_INTERVALS'`
-        # Yes.
-        # Block 0 uses skip from intrinsics[-2] ? 
-        # Or should we align differently?
-        # UNet:
-        # Enc1 -> Dec4
-        # Enc2 -> Dec3
-        # Enc3 -> Dec2
-        # Enc4 -> Dec1 (Deepest)
-        # Here x is initialized from Enc4 (Deepest).
-        # So Block 1 should use Enc3 (intrinsics[-2]).
-        # Block 2 uses Enc2 (intrinsics[-3]).
-        # Block 3 uses Enc1 (intrinsics[-4]).
-        # Block 4 uses ?? Enc0? If we have 4 intervals.
-        
-        # Let's assume len(intrinsics) >= num_decoder_layers.
         
         for i in range(self.num_decoder_layers):
             # Skip connection

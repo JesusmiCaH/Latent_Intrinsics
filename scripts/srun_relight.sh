@@ -23,10 +23,13 @@ export MASTER_ADDR=$master_addr
 echo "MASTER_ADDR="$MASTER_ADDR
 
 
-data_path=data/mit_dataset
+data_path=dataset
 port=50000
 python -m torch.distributed.launch \
---nproc_per_node=1 --master_port=${port} main_relight_ViT.py \
+--nproc_per_node=1 --master_port=${port} eval_ViT.py \
 --data_path ${data_path} \
---load_ckpt checkpoint/intrinsics_loss_weight_0.1_reg_weight_0.0001_lr_0.0002_batch_size_32_weight_decay_0.01_affine_scale_0.005/last.pth.tar \
+--conditioning cross_attn \
+--load_ckpt checkpoint/
 "$@"
+
+

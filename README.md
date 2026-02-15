@@ -33,16 +33,12 @@ python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main
 # 8. Run ViT-Ver Latent Intrinsic Encoder
 data_path=dataset
 port=50000
-python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main_cls_ViT.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 12 --batch_size 32 --learning_rate 2e-4 --weight_decay 1e-2 --resume
+python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} train_ViT.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 12 --batch_size 32 --learning_rate 2e-4 --weight_decay 1e-2 --resume --conditioning cross_attn
 
-# 9. Run MeanFlow-Ver Latent Intrinsic Encoder
-data_path=dataset
-port=50000
-python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main_meanflow.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 5 --batch_size 16 --learning_rate 2e-4 --weight_decay 1e-2 --resume
 ```
 ### Notes
 
-- To accelerate the training, I have early stopped both the Dataset loading and training per epoch. You may change them to normal in `utils.py/parallel_load_image` and `main_cls_ViT.py/train_D`
+- To accelerate the training, I have early stopped both the Dataset loading and training per epoch. You may change them to normal in `utils.py/parallel_load_image` and `train_ViT.py/train_D`
 ## Training
 
 To train the model, download the [Multi-illumination dataset](https://projects.csail.mit.edu/illumination/) and update the `data_path` in `srun.sh`. Then, use `bash srun.sh` to launch the training script for 4 GPUs.
