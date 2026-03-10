@@ -217,7 +217,9 @@ class DecoderBlock_CrossAttn(nn.Module):
         x = x + self.self_attn(self.norm1(x), rope=rope)
         
         # 3. CA (Residual)
-        x = x + self.affine_scale * self.cross_attn(self.norm2(x), light_emb)
+        # x = x + self.affine_scale * self.cross_attn(self.norm2(x), light_emb)
+        x = self.norm2(x)
+        x = x + self.affine_scale * self.cross_attn(x, light_emb).tanh()
         
         # 4. FFN (Residual)
         x = x + self.mlp(self.norm3(x))

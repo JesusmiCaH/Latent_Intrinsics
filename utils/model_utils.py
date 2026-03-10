@@ -88,7 +88,7 @@ def plot_relight_img_train(model, input_img, ref_img, target_img, save_path):
         # Relighting with target extrinsic
         edm_gen_img_e3_i1 = model([intrinsic1, extrinsic3], run_encoder = False)[:25]
 
-    def save_img(img_list, name):
+    def save_img(img_list, name, titles=None):
         grid_size = 4
         white_space = (np.ones((256*grid_size, 20, 3)).astype(np.float32) * 255).astype(np.uint8)
         np_img_list = []
@@ -98,8 +98,44 @@ def plot_relight_img_train(model, input_img, ref_img, target_img, save_path):
             img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 256, 256).permute(0,3, 1, 4, 2).reshape(256*grid_size, 256*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
             np_img_list.append(img)
             np_img_list.append(white_space)
-        Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
-    save_img([img1, img2, img3, edm_gen_img_e1_i1, edm_gen_img_e2_i1, edm_gen_img_e3_i1], save_path)
+            
+        if len(np_img_list) > 0:
+            np_img_list.pop()
+            
+        full_img = np.concatenate(np_img_list, axis = 1)
+        img_pil = Image.fromarray(full_img)
+        
+        if titles is not None:
+            from PIL import ImageDraw, ImageFont
+            title_height = 40
+            new_img = Image.new('RGB', (img_pil.width, img_pil.height + title_height), color='white')
+            new_img.paste(img_pil, (0, title_height))
+            draw = ImageDraw.Draw(new_img)
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", 24)
+            except IOError:
+                font = ImageFont.load_default()
+                
+            for i, title in enumerate(titles):
+                x_pos = i * (256 * grid_size + 20)
+                try:
+                    if hasattr(draw, 'textlength'):
+                        text_width = draw.textlength(title, font=font)
+                    elif hasattr(draw, 'textbbox'):
+                        text_width = draw.textbbox((0, 0), title, font=font)[2] - draw.textbbox((0, 0), title, font=font)[0]
+                    else:
+                        text_width = draw.textsize(title, font=font)[0]
+                except Exception:
+                    text_width = 120
+                    
+                text_x = x_pos + (256 * grid_size - text_width) // 2
+                draw.text((text_x, 10), title, fill='black', font=font)
+            img_pil = new_img
+            
+        img_pil.save(f'{name}.png')
+
+    titles = ["Input Image", "Ref Image", "Target Image", "Recon (I1+E1)", "Relight (I1+E2)", "Relight (I1+E3)"]
+    save_img([img1, img2, img3, edm_gen_img_e1_i1, edm_gen_img_e2_i1, edm_gen_img_e3_i1], save_path, titles=titles)
     model.train(was_training)
 
 @torch.no_grad()
@@ -124,8 +160,12 @@ def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path)
         # Relighting with target extrinsic
         recon_img_e3_i1 = model.forward_decoder(intri_1, extri_3).float()
 
-    def save_img(img_list, name):
-        grid_size = 4
+    def save_img(img_list, name, titles=None):
+        batch_size = img_list[0].shape[0]
+        # Find the largest perfect square <= batch_size to be safe
+        import math
+        grid_size = int(math.sqrt(batch_size))
+        
         white_space = (np.ones((224*grid_size, 20, 3)).astype(np.float32) * 255).astype(np.uint8)
         np_img_list = []
         
@@ -133,9 +173,44 @@ def plot_relight_img_train_ViT(model, input_img, ref_img, target_img, save_path)
             img = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5).reshape(grid_size, grid_size, 3, 224, 224).permute(0, 3, 1, 4, 2).reshape(224*grid_size, 224*grid_size, 3) * 255).cpu().data.numpy().astype(np.uint8)
             np_img_list.append(img)
             np_img_list.append(white_space)
-        Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
+            
+        if len(np_img_list) > 0:
+            np_img_list.pop()
+            
+        full_img = np.concatenate(np_img_list, axis = 1)
+        img_pil = Image.fromarray(full_img)
+        
+        if titles is not None:
+            from PIL import ImageDraw, ImageFont
+            title_height = 40
+            new_img = Image.new('RGB', (img_pil.width, img_pil.height + title_height), color='white')
+            new_img.paste(img_pil, (0, title_height))
+            draw = ImageDraw.Draw(new_img)
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", 24)
+            except IOError:
+                font = ImageFont.load_default()
+                
+            for i, title in enumerate(titles):
+                x_pos = i * (224 * grid_size + 20)
+                try:
+                    if hasattr(draw, 'textlength'):
+                        text_width = draw.textlength(title, font=font)
+                    elif hasattr(draw, 'textbbox'):
+                        text_width = draw.textbbox((0, 0), title, font=font)[2] - draw.textbbox((0, 0), title, font=font)[0]
+                    else:
+                        text_width = draw.textsize(title, font=font)[0]
+                except Exception:
+                    text_width = 120
+                    
+                text_x = x_pos + (224 * grid_size - text_width) // 2
+                draw.text((text_x, 10), title, fill='black', font=font)
+            img_pil = new_img
+            
+        img_pil.save(f'{name}.png')
     
-    save_img([img1, img2, img3, recon_img_e1_i1, recon_img_e2_i1, recon_img_e3_i1], save_path)
+    titles = ["Input Image", "Ref Image", "Target Image", "Recon (I1+E1)", "Relight (I1+E2)", "Relight (I1+E3)"]
+    save_img([img1, img2, img3, recon_img_e1_i1, recon_img_e2_i1, recon_img_e3_i1], save_path, titles=titles)
     model.train(was_training)
 
 

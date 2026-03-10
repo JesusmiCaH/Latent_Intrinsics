@@ -356,7 +356,6 @@ def eval_relight(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_light
                 np_img_list.append(img)
                 np_img_list.append(white_space)
             Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
-
         shift = (relight_img2 - img2).mean(dim = [2,3], keepdim = True)
         correct_relight_img2 = relight_img2 - shift
         for i_idx in range(img2.shape[0]):
@@ -409,11 +408,11 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
 
         with torch.no_grad():
             # Reconstruction
-            relight_img2 = model.forward_decoder(intrinsic1, extrinsic3).float()
+            relight_img2 = model.forward_decoder(intrinsic1, extrinsic3).clamp(-1, 1).float()
             # print("🔶 Reconstruction", img2[0,:,3,3], relight_img2[0,:,3,3])
             relight_img_0_out = model.forward_decoder(intrinsic1, extrinsic_0_out).clamp(-1, 1).float()
-
-        def save_img(img_list, name, titles=None):
+        
+        def save_img(img_list, name, titles=None, title_colors=None):
             grid_size = 4
             img_h = 224 * grid_size
             img_w = 224 * grid_size
@@ -427,7 +426,14 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
             for idx, img in enumerate(img_list):
                 # Process image grid
                 # img shape: b, 3, 224, 224
-                grid = ((img[:(grid_size**2)].clamp(-1,1) * 0.5 + 0.5)
+                # Check for correct shape before processing
+                if img.dim() == 4:
+                     params = img[:(grid_size**2)]
+                else: 
+                     # Handle case where img might be smaller or different shape if we add other things later
+                     params = img
+
+                grid = ((params.clamp(-1,1) * 0.5 + 0.5)
                         .reshape(grid_size, grid_size, 3, 224, 224)
                         .permute(0, 3, 1, 4, 2)
                         .reshape(224*grid_size, 224*grid_size, 3) * 255)
@@ -453,6 +459,10 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
                             print("Warning: Using default font, size cannot be changed.")
                     
                     text = titles[idx]
+                    color = (0, 0, 0)
+                    if title_colors and idx < len(title_colors):
+                        color = title_colors[idx]
+
                     # Get text size
                     try:
                         _, _, w, h = draw.textbbox((0, 0), text, font=font)
@@ -460,7 +470,7 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
                         w, h = draw.textsize(text, font=font)
                     
                     # Center text
-                    draw.text(((grid.shape[1]-w)/2, (title_h-h)/2), text, font=font, fill=(0, 0, 0))
+                    draw.text(((grid.shape[1]-w)/2, (title_h-h)/2), text, font=font, fill=color)
                     title_block = np.array(pil_title)
                 
                 # Combine title and grid vertically
@@ -473,15 +483,27 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
 
             Image.fromarray(np.concatenate(np_img_list, axis = 1)).save(f'{name}.png')
 
-        if i % 10 == 0:
-            save_img(
-                [img1, img2, img3, relight_img2, relight_img_0_out], 
-                f'{args.save_folder_path}/relight_{epoch}_{i}',
-                titles=['Input', 'Target', 'Reference', 'Relit', 'Albedo']
-            )
-
         shift = (relight_img2 - img2).mean(dim = [2,3], keepdim = True)
         correct_relight_img2 = relight_img2 - shift
+
+        if i % 10 == 0:
+            titles = ['Input', 'Reference', 'Target', 'Relit', 'Albedo']
+            colors = [(0,0,0), (0,0,0), (0,128,0), (0,0,255), (0,0,0)] # Black, Black, Green, Blue, Black
+            save_img(
+                [img1, img3, img2, relight_img2, relight_img_0_out], 
+                f'{args.save_folder_path}/relight_{epoch}_{i}',
+                titles=titles,
+                title_colors=colors
+            )
+
+            titles = ['Input', 'Reference', 'Target', 'Correct Relit', 'Albedo']
+            colors = [(0,0,0), (0,0,0), (0,128,0), (0,0,255), (0,0,0)] # Black, Black, Green, Blue, Black
+            save_img(
+                [img1, img3, img2, correct_relight_img2, relight_img_0_out], 
+                f'{args.save_folder_path}/relight_{epoch}_{i}_corrected',
+                titles=titles,
+                title_colors=colors
+            )
         for i_idx in range(img2.shape[0]):
             val = ssim(relight_img2[i_idx, :].cpu().data.numpy(), img2[i_idx, :].cpu().data.numpy(), data_range=2, channel_axis = 0)
             ssim_list.append(val)
@@ -492,7 +514,7 @@ def eval_relight_ViT(args, epoch, model, eval_pair_folder_shift = 5, eval_pair_l
         recon_error.append(torch.sqrt(torch.mean((relight_img2 - img2)**2,dim= [1,2,3])))
         correct_recon_error.append(torch.sqrt(torch.mean((correct_relight_img2 - img2)**2,dim= [1,2,3])))
 
-        if i >= 500:
+        if i >= 100:
             break
 
     error = torch.cat(recon_error).mean().item()

@@ -38,12 +38,12 @@ from PIL import Image
 import torchvision
 import tqdm
 from utils.utils import affine_crop_resize, multi_affine_crop_resize
-from data_utils.MiT_dataset_utils import MIT_Valset, MIT_Trainset
-from data_utils.JHU_dataset_utils import JHU_Trainset
-from data_utils.RSR_dataset_utils import RSR_Trainset
-# from models.RADIO_vae import RadioVAE
+from data_utils.MiT_dataset_utils import MIT_Dataset, MIT_Dataset_PreLoad
+# from data_utils.BigTime_dataset_utils import BigTime_Dataset_PreLoad
+from data_utils.JHU_dataset_utils import JHU_Dataset_PreLoad
+from models.dinov3_vae import DINOv3VAE
+from models.RADIO_vae import RadioVAE
 import copy
-
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
 from utils.pytorch_losses import gradient_loss
 from utils.model_utils import plot_relight_img_train_ViT, compute_logdet_loss, intrinsic_loss_ViT, save_checkpoint
@@ -52,15 +52,13 @@ from utils.model_utils import plot_relight_img_train_ViT, compute_logdet_loss, i
 warnings.filterwarnings("ignore")
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=12, type=int, metavar='N',
+parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--img_size', default=224, type=int,
                     help='img size')
-parser.add_argument('--affine_scale', default=0.008, type=float)
-parser.add_argument('--stage', default=1, type=int, choices=[1, 2],
-                    help='Training stage 1 or 2')
+parser.add_argument('--affine_scale', default=5e-3, type=float)
 parser.add_argument('-b', '--batch-size', '--batch_size', default=256, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
@@ -102,10 +100,8 @@ parser.add_argument("--weight_decay", type=float, default=0)
 # training params
 parser.add_argument("--gpus", type=int, default=1)
 # datamodule params
-parser.add_argument("--data_path", type=str, default="dataset")
+parser.add_argument("--data_path", type=str, default=".")
 parser.add_argument("--dino_size", type=str, default='vit_base')
-parser.add_argument("--conditioning", type=str, default='ada_ln', choices=['ada_ln', 'cross_attn'],
-                    help='Decoder conditioning mode: ada_ln or cross_attn')
 
 args = parser.parse_args()
 
@@ -121,10 +117,6 @@ def init_model(args):
         },
         encoder_intermediate = 'FOUR_EVEN_INTERVALS',
         with_extra_tokens = True,
-        train_encoder = False,
-        affine_scale = args.affine_scale,
-        conditioning = args.conditioning,
-        register_token_num = 4, # Use 4 register tokens for extrinsic
     )
     # model = RadioVAE()
     model.cuda(args.gpu)
@@ -134,7 +126,6 @@ def init_model(args):
 
     optimizer = AdamW(model.parameters(),
                 lr= args.learning_rate, weight_decay = args.weight_decay)
-    
     return model, optimizer
 
 def main():
@@ -193,8 +184,8 @@ def main():
 def main_worker(gpu, ngpus_per_node, args):
     args = copy.deepcopy(args)
     args.cos = True
-    save_folder_path = '''checkpoint/intrinsics_loss_weight_{}_reg_weight_{}_lr_{}_batch_size_{}_weight_decay_{}_affine_scale_{}_conditioning_{}'''.replace('\n',' ').replace(' ','').format(
-                        args.intrinsics_loss_weight, args.reg_weight, args.learning_rate, args.batch_size, args.weight_decay, args.affine_scale, args.conditioning)
+    save_folder_path = '''checkpoint/intrinsics_loss_weight_{}_reg_weight_{}_lr_{}_batch_size_{}_weight_decay_{}_affine_scale_{}'''.replace('\n',' ').replace(' ','').format(
+                        args.intrinsics_loss_weight, args.reg_weight, args.learning_rate, args.batch_size, args.weight_decay, args.affine_scale)
     args.save_folder_path = save_folder_path
     args.is_master = args.rank == 0
 
@@ -217,9 +208,9 @@ def main_worker(gpu, ngpus_per_node, args):
             args.start_epoch = checkpoint['epoch']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-
             scaler.load_state_dict(checkpoint['scaler'])
-            print("=> loaded checkpoint '{}' (epoch {})".format(args.resume, checkpoint['epoch']))
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
             del checkpoint
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
@@ -233,12 +224,10 @@ def main_worker(gpu, ngpus_per_node, args):
     ])]
 
     #train_dataset = MIT_Dataset(args.data_path, transform_train)
-    MiT_train_dataset = MIT_Trainset(os.path.join(args.data_path, 'mit_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
-    # RSR_train_dataset = RSR_Trainset(os.path.join(args.data_path, 'RSR_256'), transform_train, total_split = args.world_size, split_id = args.rank)
-    # JHU_train_dataset = JHU_Trainset(os.path.join(args.data_path, 'jhu_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
+    MiT_train_dataset = MIT_Dataset_PreLoad(os.path.join(args.data_path, 'mit_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
+    JHU_train_dataset = JHU_Dataset_PreLoad(os.path.join(args.data_path, 'jhu_dataset'), transform_train, total_split = args.world_size, split_id = args.rank)
 
-    print('NUM of MIT training images: {}'.format(len(MiT_train_dataset)))
-    # print('NUM of RSR training images: {}'.format(len(RSR_train_dataset)))
+    print('NUM of training images: {}+{}'.format(len(MiT_train_dataset), len(JHU_train_dataset)))
 
     # if args.distributed:
     #     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle = True, drop_last = True)
@@ -247,7 +236,7 @@ def main_worker(gpu, ngpus_per_node, args):
     train_sampler = None
 
     train_loader = torch.utils.data.DataLoader(
-        torch.utils.data.ConcatDataset([MiT_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
+        torch.utils.data.ConcatDataset([MiT_train_dataset, JHU_train_dataset]), batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=False, sampler=train_sampler, drop_last = True, persistent_workers = True)
 
     if not args.multiprocessing_distributed or (args.multiprocessing_distributed
@@ -260,28 +249,24 @@ def main_worker(gpu, ngpus_per_node, args):
     rec_loss_list = []
     sim_intrinsic_list = []
 
-    for epoch in range(args.start_epoch, args.start_epoch + args.epochs):
+    for epoch in range(args.start_epoch, args.start_epoch+120):
         if args.distributed and train_sampler is not None:
             train_sampler.set_epoch(epoch)
         # Pass lists to be updated in-place
-        if args.stage == 1:
-            train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_loss_list, sim_intrinsic_list)
-        else:
-            train_D_stage2(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_loss_list, sim_intrinsic_list)
+        train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_loss_list, sim_intrinsic_list)
         
         # Plotting and saving is now handled inside train_D periodically, 
         # but we can still do an end-of-epoch save/plot if desired.
         # Keeping original end-of-epoch logic if needed, but the requirement was "Per 2k step".
         # Let's keep a final save at end of epoch just in case 2k step didn't align with end.
         
-        if args.is_master and epoch % args.save_freq == 0:
-            save_checkpoint({
+        if args.is_master:
+             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
-
                 'scaler': scaler.state_dict(),
-            }, False, filename = f'{save_folder_path}/checkpoint_epoch_{epoch+1}.pth')
+            }, False, filename = '{}/last.pth.tar'.format(save_folder_path))
 
 def print_gradients(model):
     max_grad = 0
@@ -303,7 +288,6 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
     logdet_loss_extrinsic = compute_logdet_loss()
     ssim_loss = compute_SSIM_loss()
 
-
     def smooth_curve(data, window_size=500):
         if len(data) < window_size:
              return data
@@ -319,14 +303,13 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
 
         rnd_normal = torch.randn([input_img.shape[0], 1, 1, 1], device=input_img.device)
         sigma = (rnd_normal * P_std + P_mean).exp()
-        
-        if epoch >= args.epochs/2:
+        if epoch >= 60:
             sigma = sigma * 0
 
         noisy_input_img = input_img + torch.randn_like(input_img) * sigma   # nchw
         noisy_ref_img = ref_img + torch.randn_like(ref_img) * sigma
 
-        # if i>2: break
+        # Removed break condition: if i > 600: break
     
         with torch.cuda.amp.autocast():
             intri_input, extri_input = model.forward_encoder(noisy_input_img)    # no masking
@@ -343,21 +326,18 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
 
         # Since logdet_loss function take only LIST as input due to the original design, we should pack our input matrix into a list
         logdet_pred, logdet_target = logdet_loss_intrinsic(intri_input)
+        
         logdet_pred_ext, logdet_target_ext = logdet_loss_extrinsic([extri_input])
-
-        rec_loss = nn.MSELoss()(recon_img,input_img)
-        rec_loss = 10 * rec_loss + 0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
 
         sim_intrinsic = intrinsic_loss_ViT(intri_input, intri_ref)
 
-        loss = rec_loss + args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() - args.intrinsics_loss_weight * sim_intrinsic
-
+        rec_loss = nn.MSELoss()(recon_img,input_img)
+        rec_loss = 10 * rec_loss + \
+                0.1 * (1 - ssim_loss(recon_img, input_img)) + gradient_loss(recon_img,input_img)
+        loss = rec_loss - args.intrinsics_loss_weight * sim_intrinsic
+        
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        
-        # Gradient Clipping to prevent NaN
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad()
@@ -374,43 +354,43 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
             pbar.set_postfix({'loss': loss.item(), 'rec_loss': rec_loss.item(), 'sim_int': sim_intrinsic.item()})
 
         # Periodic Saving and Plotting every 1000 steps
-        if (i % 2000 == 0 or i==300) and i > 0:
-            if args.is_master:
-                print("💾 Saving checkpoint and plotting...")
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'state_dict': model.state_dict(),
-                    'optimizer' : optimizer.state_dict(),
+        if i % 1000 == 0 and i > 0:
+             if args.is_master:
+                    print("💾 Saving checkpoint and plotting...")
+                    save_checkpoint({
+                        'epoch': epoch + 1,
+                        'state_dict': model.state_dict(),
+                        'optimizer' : optimizer.state_dict(),
+                        'scaler': scaler.state_dict(),
+                    }, False, filename = '{}/last.pth.tar'.format(args.save_folder_path))
 
-                    'scaler': scaler.state_dict(),
-                }, False, filename = '{}/last.pth.tar'.format(args.save_folder_path))
+                    # Plot relighting result
+                    target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
+                    plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
 
-                # Plot relighting result
-                target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
-                plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
-
-                record_start_step = 500
-                # Plot smoothed curves with raw data background
-                if len(loss_list) > 500:
+                    # Plot smoothed curves with raw data background
                     plt.figure(figsize=(20,5))
                     
                     plt.subplot(1,3,1)
-                    plt.plot(np.arange(500, len(loss_list)), loss_list[500:], alpha=0.3, color='blue', label='Total Loss')
-                    plt.plot(np.arange(len(smooth_curve(loss_list))) + (500-1), smooth_curve(loss_list), color='blue', label='Total Loss (Smoothed)')
+                    plt.plot(loss_list, alpha=0.3, color='blue', label='Total Loss')
+                    if len(loss_list) > 500:
+                        plt.plot(np.arange(len(smooth_curve(loss_list))) + (500-1), smooth_curve(loss_list), color='blue', label='Total Loss (Smoothed)')
                     plt.title('total loss')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
                     
                     plt.subplot(1,3,2)
-                    plt.plot(np.arange(500, len(rec_loss_list)), rec_loss_list[500:], alpha=0.3, color='orange', label='Reconstruction Loss')
-                    plt.plot(np.arange(len(smooth_curve(rec_loss_list))) + (500-1), smooth_curve(rec_loss_list), color='orange', label='Reconstruction Loss (Smoothed)')
+                    plt.plot(rec_loss_list, alpha=0.3, color='orange', label='Reconstruction Loss')
+                    if len(rec_loss_list) > 500:
+                        plt.plot(np.arange(len(smooth_curve(rec_loss_list))) + (500-1), smooth_curve(rec_loss_list), color='orange', label='Reconstruction Loss (Smoothed)')
                     plt.title('reconstruction loss')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
                     
                     plt.subplot(1,3,3)
-                    plt.plot(np.arange(500, len(sim_intrinsic_list)), sim_intrinsic_list[500:], alpha=0.3, color='green', label='Intrinsic Similarity')
-                    plt.plot(np.arange(len(smooth_curve(sim_intrinsic_list))) + (500-1), smooth_curve(sim_intrinsic_list), color='green', label='Intrinsic Similarity (Smoothed)')
+                    plt.plot(sim_intrinsic_list, alpha=0.3, color='green', label='Intrinsic Similarity')
+                    if len(sim_intrinsic_list) > 500:
+                        plt.plot(np.arange(len(smooth_curve(sim_intrinsic_list))) + (500-1), smooth_curve(sim_intrinsic_list), color='green', label='Intrinsic Similarity (Smoothed)')
                     plt.title('intrinsic similarity')
                     plt.legend()
                     plt.grid(True, alpha=0.3)
@@ -421,155 +401,6 @@ def train_D(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_
     if args.gpu == 0 and epoch % 5 == 0:
         target_img = ref_img[torch.randperm(input_img.shape[0]).to(args.gpu)]
         plot_relight_img_train_ViT(model, input_img, ref_img, target_img, args.save_folder_path + '/{:05d}_{:05d}_gen'.format(epoch + 1, i))
-
-def train_D_stage2(train_loader, model, scaler, optimizer, epoch, args, loss_list, rec_loss_list, sim_intrinsic_list):
-    # switch to train mode
-    t0 = time.time()
-    P_mean=-1.2
-    P_std=1.2
-    sigma_data = 0.5
-
-    logdet_loss_intrinsic = compute_logdet_loss()
-    logdet_loss_extrinsic = compute_logdet_loss()
-    ssim_loss = compute_SSIM_loss()
-
-
-    def smooth_curve(data, window_size=500):
-        if len(data) < window_size:
-             return data
-        box = np.ones(window_size) / window_size
-        return np.convolve(data, box, mode='valid')
-
-    # Wrap train_loader with tqdm
-    pbar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch} (Stage 2)", disable=not args.is_master)
-
-    for i, (input_img, ref_img) in enumerate(pbar):
-        input_img = input_img.to(args.gpu)
-        ref_img = ref_img.to(args.gpu)
-
-        rnd_normal = torch.randn([input_img.shape[0], 1, 1, 1], device=input_img.device)
-        sigma = (rnd_normal * P_std + P_mean).exp()
-        
-        if epoch >= args.epochs/2:
-            sigma = sigma * 0
-
-        # Create A, B, D images
-        # Image A is input_img.
-        # Image B and Image D should be from a different scene than A.
-        # And Image B and Image D should be from the SAME scene as each other.
-        # Since ref_img and input_img in the same batch index are from the SAME scene:
-        # We can just randomly permute the batch indices.
-        perm = torch.randperm(input_img.shape[0]).to(args.gpu)
-        
-        img_A = input_img
-        img_B = ref_img[perm]
-        img_D = input_img[perm] # Same scene as B!
-
-        noisy_img_A = img_A + torch.randn_like(img_A) * sigma
-        noisy_img_B = img_B + torch.randn_like(img_B) * sigma
-
-        with torch.cuda.amp.autocast():
-            # Step 1: Relight process 1 (C = Intrinsic A + Extrinsic B)
-            intri_A, extri_A = model.forward_encoder(noisy_img_A)
-            intri_B, extri_B = model.forward_encoder(noisy_img_B)
-
-            img_C = model.forward_decoder(intri_A, extri_B).float() 
-            
-            # Step 2: Relight process 2
-            # Add noise to intermediate C before passing it to encoder for consistency?
-            noisy_img_C = img_C + torch.randn_like(img_C) * sigma
-            noisy_img_D = img_D + torch.randn_like(img_D) * sigma
-
-            intri_C, extri_C = model.forward_encoder(noisy_img_C)
-            intri_D, extri_D = model.forward_encoder(noisy_img_D)
-
-            mask = (torch.rand(img_D.shape[0]) > 0.9).float().to(args.gpu).reshape(-1,1,1,1).float()    # 10% mask
-
-            # Intrinsic mainly from reference D, but can mix with B (since they are same scene)
-            intri_D_mixed = [i_D * mask + i_B * (1 - mask) for i_D, i_B in zip(intri_D, intri_B)]
-
-            # Final output应该和B一样
-            img_final = model.forward_decoder(intri_D_mixed, extri_C).float()
-
-        # Loss Calculation
-        logdet_pred, logdet_target = logdet_loss_intrinsic(intri_A)
-        logdet_pred_ext, logdet_target_ext = logdet_loss_extrinsic([extri_B])
-
-        rec_loss = nn.MSELoss()(img_final, img_B)
-        rec_loss = 10 * rec_loss + 0.1 * (1 - ssim_loss(img_final, img_B)) + gradient_loss(img_final, img_B)
-
-        sim_intrinsic = intrinsic_loss_ViT(intri_D, intri_B)
-
-        loss = rec_loss + args.reg_weight * ((logdet_pred_ext - logdet_target_ext) ** 2).mean() - args.intrinsics_loss_weight * sim_intrinsic
-
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        
-        # Gradient Clipping to prevent NaN
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
-        
-        t0 = time.time()
-        torch.cuda.reset_peak_memory_stats()
-
-        loss_list.append(loss.item())
-        rec_loss_list.append(rec_loss.item())
-        sim_intrinsic_list.append(sim_intrinsic.item())
-        
-        # Update progress bar
-        if i % 10 == 0:
-            pbar.set_postfix({'loss': loss.item(), 'rec_loss': rec_loss.item(), 'sim_int': sim_intrinsic.item()})
-
-        # Periodic Saving and Plotting every 1000 steps
-        if (i % 2000 == 0 or i==300) and i > 0:
-            if args.is_master:
-                print("💾 Saving checkpoint and plotting...")
-                save_checkpoint({
-                    'epoch': epoch + 1,
-                    'state_dict': model.state_dict(),
-                    'optimizer' : optimizer.state_dict(),
-                    'scaler': scaler.state_dict(),
-                }, False, filename = '{}/last_stage2.pth.tar'.format(args.save_folder_path))
-
-                # Plot relighting result (use A, B, C or final to visualize)
-                # plot_relight_img_train_ViT might need standard arguments: model, input_img, ref_img, target_img
-                # Let's pass img_A, img_B, img_final for visualization
-                plot_relight_img_train_ViT(model, img_A, img_B, img_final, args.save_folder_path + '/{:05d}_{:05d}_gen_stage2'.format(epoch + 1, i))
-
-                # Plotting code is the same
-                record_start_step = 500
-                if len(loss_list) > 500:
-                    plt.figure(figsize=(20,5))
-                    
-                    plt.subplot(1,3,1)
-                    plt.plot(np.arange(500, len(loss_list)), loss_list[500:], alpha=0.3, color='blue', label='Total Loss')
-                    plt.plot(np.arange(len(smooth_curve(loss_list))) + (500-1), smooth_curve(loss_list), color='blue', label='Total Loss (Smoothed)')
-                    plt.title('total loss')
-                    plt.legend()
-                    plt.grid(True, alpha=0.3)
-                    
-                    plt.subplot(1,3,2)
-                    plt.plot(np.arange(500, len(rec_loss_list)), rec_loss_list[500:], alpha=0.3, color='orange', label='Reconstruction Loss')
-                    plt.plot(np.arange(len(smooth_curve(rec_loss_list))) + (500-1), smooth_curve(rec_loss_list), color='orange', label='Reconstruction Loss (Smoothed)')
-                    plt.title('reconstruction loss')
-                    plt.legend()
-                    plt.grid(True, alpha=0.3)
-                    
-                    plt.subplot(1,3,3)
-                    plt.plot(np.arange(500, len(sim_intrinsic_list)), sim_intrinsic_list[500:], alpha=0.3, color='green', label='Intrinsic Similarity')
-                    plt.plot(np.arange(len(smooth_curve(sim_intrinsic_list))) + (500-1), smooth_curve(sim_intrinsic_list), color='green', label='Intrinsic Similarity (Smoothed)')
-                    plt.title('intrinsic similarity')
-                    plt.legend()
-                    plt.grid(True, alpha=0.3)
-                    
-                    plt.savefig('{}/training_curves_stage2.png'.format(args.save_folder_path))
-                    plt.close('all')
-
-    if args.gpu == 0 and epoch % 5 == 0:
-        plot_relight_img_train_ViT(model, img_A, img_B, img_final, args.save_folder_path + '/{:05d}_{:05d}_gen_stage2'.format(epoch + 1, i))
 
     torch.distributed.barrier()
 

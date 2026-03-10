@@ -1,7 +1,6 @@
 import torch
 from torch import nn
-from .dinov3_decoder_ViT import *
-# from .dinov3_decoder_ViT_old_v2 import *
+from .dinov3_decoder_ViT_old import *
 from .dinov3.utils.backbone_out import _get_backbone_out_indices, BackboneLayersSet
 from .dinov3 import vision_transformer as dinov3
 from transformers import AutoModel
@@ -22,7 +21,7 @@ class DINOv3VAE(nn.Module):
             lora_r = 16,
             lora_alpha = 16,
             lora_dropout = 0.05,
-            register_token_num = 0, # 0 means use CLS token, 1-4 means use that many register tokens
+            register_token_num = 4, # kept for signature compatibility
         ):
         super(DINOv3VAE, self).__init__()
         self.encoder = getattr(dinov3, dino_model)(**encoder_cfg)
@@ -32,11 +31,12 @@ class DINOv3VAE(nn.Module):
         # Freeze base model
         for param in self.encoder.parameters():
             param.requires_grad = False
-        # Unfreeze storage tokens (registers) if we are using them for extrinsic
-        if register_token_num > 0:
-            print(f"Unfreezing storage_tokens (registers) for register_token_num={register_token_num}")
+            
+        # Unfreeze storage tokens (registers) and cls token if we are using them
+        if with_extra_tokens:
+            print("Unfreezing storage_tokens (registers) and cls_token for concatenated lighting tokens")
             for name, param in self.encoder.named_parameters():
-                if 'storage_tokens' in name:
+                if 'storage_tokens' in name or 'cls_token' in name:
                     param.requires_grad = True
         
         if train_encoder:
@@ -63,14 +63,10 @@ class DINOv3VAE(nn.Module):
         self.n_lighting_tokens = 5 if with_extra_tokens else 1
         
         latent_dim = self.encoder.embed_dim
-        self.register_token_num = register_token_num
-        
-        # If register_token_num is 0, we use CLS token (1 token -> latent_dim)
-        # If > 0, we concatenate that many register tokens (N tokens -> latent_dim * N)
-        input_dim = latent_dim * max(1, self.register_token_num)
 
+        # The logic here: lighting encoder takes the concatenated CLS + extra tokens
         self.lighting_encoder = nn.Sequential(
-            nn.Linear(input_dim, latent_dim), nn.GELU(),
+            nn.Linear(latent_dim * self.n_lighting_tokens, latent_dim), nn.GELU(),
             nn.Linear(latent_dim, latent_dim), nn.GELU(),
             nn.Linear(latent_dim, extrinsic_dim), nn.LayerNorm(extrinsic_dim)
         )
@@ -94,22 +90,21 @@ class DINOv3VAE(nn.Module):
         # features: List of [vis_tokens, cls_token, extra_tokens]
         intrinsics = [feat[0] for feat in outputs]
         
-        # Select specific token for lighting
+        # Select tokens for lighting
         # outputs[-1] is the last layer output
         # outputs[-1][1] is cls_token [B, D]
         # outputs[-1][2] is extra_tokens [B, N_extra, D]
         
-        if self.register_token_num == 0:
-            # Use CLS token
-            lighting_feat = outputs[-1][1] # [B, D]
+        if self.with_extra_tokens:
+            cls_token = outputs[-1][1].unsqueeze(1) # [B, 1, D]
+            extra_tokens = outputs[-1][2] # [B, N_extra, D]
+            # Concatenate CLS token with all extra tokens
+            lighting_feat = torch.cat([cls_token, extra_tokens], dim=1) # [B, 1 + N_extra, D]
+            lighting_feat = lighting_feat.flatten(1) # [B, (1 + N_extra) * D]
         else:
-            # Check if we have enough registers
-            if outputs[-1][2].shape[1] < self.register_token_num:
-                raise ValueError(f"Requested register_token_num {self.register_token_num} but only have {outputs[-1][2].shape[1]} extra tokens")
-            # Select the first 'register_token_num' register tokens and flatten them
-            lighting_feat = outputs[-1][2][:, :self.register_token_num, :].flatten(1) # [B, N * D]
+            lighting_feat = outputs[-1][1] # [B, D]
             
-        # lighting_feat is [B, input_dim]
+        # lighting_feat is [B, D * n_lighting_tokens]
         extrinsic = self.lighting_encoder(lighting_feat)
         return intrinsics, extrinsic
 

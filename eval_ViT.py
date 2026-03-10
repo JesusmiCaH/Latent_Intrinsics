@@ -39,8 +39,10 @@ import torchvision
 import tqdm
 from utils.utils import affine_crop_resize, multi_affine_crop_resize
 from data_utils.MiT_dataset_utils import MIT_Valset
-from models.dinov3_vae import DINOv3VAE
-from models.RADIO_vae import RadioVAE
+# from models.dinov3_vae import DINOv3VAE
+from models.dinov3_vae_old import DINOv3VAE
+
+# from models.RADIO_vae import RadioVAE
 
 import copy
 from utils.pytorch_ssim import SSIM as compute_SSIM_loss
@@ -57,13 +59,13 @@ parser.add_argument('--epochs', default=200, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--img_size', default=224, type=int,
                     help='img size')
-parser.add_argument('--affine_scale', default=7e-2, type=float)
-parser.add_argument('-b', '--batch-size', default=16, type=int,
+parser.add_argument('--affine_scale', default=0.2, type=float)
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('-p', '--print-freq', default=10, type=int,
+parser.add_argument('-p', '--print-freq', default=25, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--save_freq', default=5, type=int,
                      help='print frequency (default: 10)')
@@ -119,10 +121,10 @@ def init_model(args):
         },
         encoder_intermediate = 'FOUR_EVEN_INTERVALS',
         with_extra_tokens = True,
-        train_encoder = True,
+        train_encoder = False,
         affine_scale = args.affine_scale,
         conditioning = args.conditioning,
-        extrinsic_token_idx = 0, # Use register token 0
+        register_token_num = 4, # Use 4 register tokens for extrinsic
     )
     model.cuda(args.gpu)
 
@@ -140,8 +142,6 @@ def main():
     cudnn.deterministic = True
     args = parser.parse_args()
     #assert args.batch_size % args.batch_iter == 0
-    if not os.path.exists('visualize'):
-        os.system('mkdir visualize')
     if not os.path.exists('checkpoint'):
         os.system('mkdir checkpoint')
     if args.seed is not None:

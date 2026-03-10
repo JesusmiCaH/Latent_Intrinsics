@@ -33,7 +33,7 @@ python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} main
 # 8. Run ViT-Ver Latent Intrinsic Encoder
 data_path=dataset
 port=50000
-python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} train_ViT.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 12 --batch_size 32 --learning_rate 2e-4 --weight_decay 1e-2 --resume --conditioning cross_attn
+python -m torch.distributed.launch --nproc_per_node=1 --master_port=${port} train_ViT.py --data_path ${data_path} --reg_weight 1e-4 --intrinsics_loss_weight 1e-1 --epochs 10 --batch_size 32 --learning_rate 2e-4 --weight_decay 1e-2 --resume --conditioning cross_attn 
 
 ```
 ### Notes
